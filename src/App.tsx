@@ -5,12 +5,14 @@ import { GraphView } from './components/GraphView';
 import { CommandBar } from './components/CommandBar';
 import { useStore } from './store/useStore';
 import { open } from '@tauri-apps/plugin-dialog';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   FileText, Share2, Search, Settings,
   PanelLeftClose, PanelLeftOpen, Plus, X,
   Shield, Palette, Keyboard,
 } from 'lucide-react';
 import { useKBar } from 'kbar';
+import { Toaster } from 'react-hot-toast';
 
 /* ─── Settings Modal ─────────────────────────────────────── */
 type SettingsTab = 'general' | 'appearance' | 'hotkeys';
@@ -184,8 +186,16 @@ const EmptyState: React.FC = () => (
 
 /* ─── App Root ───────────────────────────────────────────── */
 const App: React.FC = () => {
-  const { vaultPath, setVaultPath, activeTab, viewMode, isSidebarOpen, setSidebarOpen, setViewMode, createFile, closeTab, loadGraphData } = useStore();
+  const { vaultPath, setVaultPath, activeTab, viewMode, isSidebarOpen, setSidebarOpen, setViewMode, createFile, closeTab, loadGraphData, loadFiles, importFiles } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Restore vault from storage on mount
+  useEffect(() => {
+    if (vaultPath) {
+      loadFiles();
+      loadGraphData();
+    }
+  }, [vaultPath, loadFiles, loadGraphData]);
 
   const handleOpenVault = useCallback(async () => {
     const selected = await open({ directory: true, multiple: false });
@@ -209,12 +219,36 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (viewMode === 'graph') loadGraphData();
-  }, [viewMode]);
+  }, [viewMode, loadGraphData]);
+
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onDragDropEvent((event) => {
+      if (event.payload.type === 'drop') {
+        const { paths } = event.payload;
+        if (paths.length > 0) {
+          importFiles(paths);
+        }
+      }
+    });
+
+    return () => {
+      unlisten.then(fn => fn());
+    };
+  }, [importFiles]);
 
   const showGraph  = vaultPath && viewMode === 'graph';
 
   return (
     <CommandBar>
+      <Toaster position="bottom-right" toastOptions={{ 
+        style: { 
+          background: 'var(--bg-2)', 
+          color: 'var(--tx-1)', 
+          borderRadius: '4px',
+          border: '1px solid var(--bd-1)',
+          fontSize: '0.85rem'
+        } 
+      }} />
       <div className="app-container">
         <IconDock onSettings={() => setSettingsOpen(true)} />
         {vaultPath && isSidebarOpen && <Sidebar />}

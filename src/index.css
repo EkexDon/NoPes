@@ -1017,3 +1017,18 @@ a { color: var(--accent); text-decoration: none; }
 .tippy-box[data-theme~='nopes'] > .tippy-content {
   padding: 8px 12px;
 }
+
+/* Diagnostics & Polishing */
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

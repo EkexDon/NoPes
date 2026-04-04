@@ -1,7 +1,0 @@
-{
-  "identifier": "allow-list-files",
-  "description": "Enables list_files command",
-  "commands": {
-    "allow": ["list_files"]
-  }
-}

@@ -12,6 +12,7 @@
 - ⚡ **Command Bar (Cmd+K)**: Instant access to all your files and frequent actions through a keyboard-driven command palette.
 - 🛠️ **Rich Text Editor**: A powerful TipTap-based editor supporting complex formatting, headlings, lists, code blocks, and images.
 - 🔒 **Local-First & Private**: Your data never leaves your computer. NoPes works directly with your local Markdown files.
+- 📄 **Word to Markdown**: Seamlessly import `.docx` files. Just drop them into your vault or onto the app, and they're automatically converted to Markdown.
 
 ##Web-Download
 https://nopes-web.vercel.app/

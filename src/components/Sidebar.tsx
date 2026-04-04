@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useStore } from '../store/useStore';
 import {
   FileText, FolderOpen, ChevronRight, ChevronDown,
-  Plus, FolderPlus, Star, X,
+  Plus, FolderPlus, Star, X, RotateCw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GraphView } from './GraphView';
@@ -110,7 +110,7 @@ const InlineAdd: React.FC<{
 
 /* ─── Sidebar ────────────────────────────────────────────── */
 export const Sidebar: React.FC = () => {
-  const { files, createFile, createFolder, vaultPath } = useStore();
+  const { files, createFile, createFolder, vaultPath, refresh, isRefreshing } = useStore();
   const [adding, setAdding] = useState<'file' | 'folder' | null>(null);
 
   const handleSubmit = async (name: string) => {
@@ -128,8 +128,24 @@ export const Sidebar: React.FC = () => {
     <div className="sidebar">
       {/* Header */}
       <div className="sidebar-header">
-        <span className="sidebar-vault-name">{vaultName}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <span className="sidebar-vault-name">{vaultName}</span>
+          <button 
+            onClick={() => useStore.getState().testToast()} 
+            style={{ fontSize: '0.65rem', background: 'var(--bg-3)', border: '1px solid var(--bd-1)', borderRadius: '3px', cursor: 'pointer', padding: '2px 4px' }}
+          >
+            Test Toasts
+          </button>
+        </div>
         <div className="sidebar-actions">
+          <button 
+            className={`icon-btn sm ${isRefreshing ? 'spinning' : ''}`} 
+            onClick={() => refresh()} 
+            title="Refresh vault"
+            disabled={isRefreshing}
+          >
+            <RotateCw size={14} />
+          </button>
           <button className="icon-btn sm" onClick={() => setAdding('file')} title="New note (⌘N)">
             <Plus size={14} />
           </button>
