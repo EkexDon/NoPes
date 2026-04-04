@@ -13,6 +13,9 @@
 - 🛠️ **Rich Text Editor**: A powerful TipTap-based editor supporting complex formatting, headlings, lists, code blocks, and images.
 - 🔒 **Local-First & Private**: Your data never leaves your computer. NoPes works directly with your local Markdown files.
 
+##Web-Download
+https://nopes-web.vercel.app/
+
 ## 📦 Installation (MacOS)
 
 1. Download the latest **`.dmg`** file from the [Releases](https://github.com/EkexDon/NoPes/releases) page.
