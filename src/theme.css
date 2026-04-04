@@ -1,0 +1,25 @@
+:root {
+  /* Core Colors */
+  --nopes-bg: #0d0d0d;
+  --nopes-sidebar-bg: rgba(18, 18, 18, 0.8);
+  --nopes-accent: #7b4dff;
+  --nopes-accent-soft: rgba(123, 77, 255, 0.15);
+  
+  /* Text */
+  --nopes-text-main: #e0e0e0;
+  --nopes-text-muted: #999;
+  
+  /* Borders & Glass */
+  --nopes-border: rgba(255, 255, 255, 0.08);
+  --nopes-blur: blur(12px);
+  
+  /* Editor specific */
+  --nopes-editor-max-width: 800px;
+  --nopes-font-size: 16px;
+  --nopes-line-height: 1.6;
+}
+
+/* 
+  Chef's Tip: You can override these variables in your own 
+  custom CSS file to completely change the look of Nopes.
+*/
