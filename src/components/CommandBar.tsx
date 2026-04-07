@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   KBarProvider, KBarPortal, KBarPositioner,
-  KBarAnimator, KBarSearch, KBarResults, useMatches,
+  KBarAnimator, KBarSearch, KBarResults, useMatches, useRegisterActions
 } from 'kbar';
 import { useStore } from '../store/useStore';
 import { FileText, Plus, Share2 } from 'lucide-react';
@@ -43,63 +43,74 @@ const Results: React.FC = () => {
   );
 };
 
-/* ─── CommandBar Provider ────────────────────────────────── */
-export const CommandBar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+/* ─── CommandBar Content (Registers Actions Dynamically) ─── */
+const CommandBarContent: React.FC = () => {
   const { allFiles, openFile, setViewMode, createFile } = useStore();
 
-  const fileActions = allFiles.map(file => ({
-    id: `open-${file.path}`,
-    name: file.name.replace(/\.md$/, ''),
-    keywords: file.name,
-    section: 'Files',
-    subtitle: (() => {
-      const parts = file.path.split('/');
-      return parts.length >= 2 ? parts[parts.length - 2] : 'Vault';
-    })(),
-    perform: () => { openFile(file.path); setViewMode('editor'); },
-    icon: <FileText size={16} />,
-  }));
+  const actions = useMemo(() => {
+    const fileActions = allFiles.map(file => ({
+      id: `open-${file.path}`,
+      name: file.name.replace(/\.md$/, ''),
+      keywords: file.name,
+      section: 'Files',
+      subtitle: (() => {
+        const parts = file.path.split('/');
+        return parts.length >= 2 ? parts[parts.length - 2] : 'Vault';
+      })(),
+      perform: () => { openFile(file.path); setViewMode('editor'); },
+      icon: <FileText size={16} />,
+    }));
 
-  const actions = [
-    {
-      id: 'new-note',
-      name: 'New Note',
-      shortcut: ['n'],
-      keywords: 'create new note',
-      section: 'Actions',
-      perform: () => createFile('Untitled'),
-      icon: <Plus size={16} />,
-    },
-    {
-      id: 'graph-view',
-      name: 'Open Graph View',
-      shortcut: ['g'],
-      keywords: 'graph connections',
-      section: 'Actions',
-      perform: () => setViewMode('graph'),
-      icon: <Share2 size={16} />,
-    },
-    ...fileActions,
-  ];
+    return [
+      {
+        id: 'new-note',
+        name: 'New Note',
+        shortcut: ['n'],
+        keywords: 'create new note',
+        section: 'Actions',
+        perform: () => createFile('Untitled'),
+        icon: <Plus size={16} />,
+      },
+      {
+        id: 'graph-view',
+        name: 'Open Graph View',
+        shortcut: ['g'],
+        keywords: 'graph connections',
+        section: 'Actions',
+        perform: () => setViewMode('graph'),
+        icon: <Share2 size={16} />,
+      },
+      ...fileActions,
+    ];
+  }, [allFiles, openFile, setViewMode, createFile]);
+
+  useRegisterActions(actions, [actions]);
 
   return (
-    <KBarProvider actions={actions}>
-      <KBarPortal>
-        <KBarPositioner className="kbar-positioner">
-          <KBarAnimator className="kbar-animator">
-            <div className="kbar-search-row">
-              <Search16 />
-              <KBarSearch
-                className="kbar-search"
-                defaultPlaceholder="Search notes or type a command…"
-              />
-            </div>
-            <div className="kbar-results-wrapper">
-              <Results />
-            </div>
-          </KBarAnimator>
-        </KBarPositioner>
-      </KBarPortal>
+    <KBarPortal>
+      <KBarPositioner className="kbar-positioner">
+        <KBarAnimator className="kbar-animator">
+          <div className="kbar-search-row">
+            <Search16 />
+            <KBarSearch
+              className="kbar-search"
+              defaultPlaceholder="Search notes or type a command…"
+            />
+          </div>
+          <div className="kbar-results-wrapper">
+            <Results />
+          </div>
+        </KBarAnimator>
+      </KBarPositioner>
+    </KBarPortal>
+  );
+};
+
+/* ─── CommandBar Provider ────────────────────────────────── */
+export const CommandBar: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  return (
+    <KBarProvider>
+      <CommandBarContent />
       {children}
     </KBarProvider>
   );

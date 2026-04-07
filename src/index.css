@@ -232,6 +232,25 @@ a { color: var(--accent); text-decoration: none; }
 .star-btn:hover { color: var(--gold); }
 .star-btn.is-starred { opacity: 1; color: var(--gold); }
 
+.file-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.action-btn {
+  opacity: 0;
+  color: var(--tx-3);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  transition: opacity 0.15s, color 0.15s;
+}
+.action-btn:hover { color: var(--tx-1); }
+.file-row:hover .action-btn { opacity: 1; }
+
 .children-container { overflow: hidden; }
 
 /* ======================================================

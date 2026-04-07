@@ -14,6 +14,27 @@ import {
 import { useKBar } from 'kbar';
 import { Toaster } from 'react-hot-toast';
 
+/* ─── Error Boundary ─────────────────────────────────────── */
+class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
+  constructor(props: any) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
+  componentDidCatch(error: Error, errorInfo: any) { console.error('ErrorBoundary caught:', error, errorInfo); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '40px', background: 'var(--bg-0)', color: 'var(--tx-1)', height: '100vh', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <h2>Whoops, Nopes crashed! (The Black Screen)</h2>
+          <pre style={{ background: '#300', padding: '16px', borderRadius: '4px', overflow: 'auto', fontSize: '13px' }}>
+            {this.state.error?.stack || this.state.error?.message}
+          </pre>
+          <button onClick={() => window.location.reload()} style={{ padding: '8px 16px', borderRadius: '4px', background: 'var(--accent)', alignSelf: 'flex-start', color: '#fff' }}>Reload Application</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ─── Settings Modal ─────────────────────────────────────── */
 type SettingsTab = 'general' | 'appearance' | 'hotkeys';
 
@@ -239,34 +260,36 @@ const App: React.FC = () => {
   const showGraph  = vaultPath && viewMode === 'graph';
 
   return (
-    <CommandBar>
-      <Toaster position="bottom-right" toastOptions={{ 
-        style: { 
-          background: 'var(--bg-2)', 
-          color: 'var(--tx-1)', 
-          borderRadius: '4px',
-          border: '1px solid var(--bd-1)',
-          fontSize: '0.85rem'
-        } 
-      }} />
-      <div className="app-container">
-        <IconDock onSettings={() => setSettingsOpen(true)} />
-        {vaultPath && isSidebarOpen && <Sidebar />}
-        <main className="main-content">
-          {!vaultPath ? (
-            <WelcomeScreen onOpen={handleOpenVault} />
-          ) : showGraph ? (
-            <GraphView />
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
-              <TabBar />
-              {activeTab ? <NoteEditor /> : <EmptyState />}
-            </div>
-          )}
-        </main>
-      </div>
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
-    </CommandBar>
+    <ErrorBoundary>
+      <CommandBar>
+        <Toaster position="bottom-right" toastOptions={{ 
+          style: { 
+            background: 'var(--bg-2)', 
+            color: 'var(--tx-1)', 
+            borderRadius: '4px',
+            border: '1px solid var(--bd-1)',
+            fontSize: '0.85rem'
+          } 
+        }} />
+        <div className="app-container">
+          <IconDock onSettings={() => setSettingsOpen(true)} />
+          {vaultPath && isSidebarOpen && <Sidebar />}
+          <main className="main-content">
+            {!vaultPath ? (
+              <WelcomeScreen onOpen={handleOpenVault} />
+            ) : showGraph ? (
+              <GraphView />
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
+                <TabBar />
+                {activeTab ? <NoteEditor /> : <EmptyState />}
+              </div>
+            )}
+          </main>
+        </div>
+        {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      </CommandBar>
+    </ErrorBoundary>
   );
 };
 

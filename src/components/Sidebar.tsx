@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { useStore } from '../store/useStore';
+import toast from 'react-hot-toast';
 import {
   FileText, FolderOpen, ChevronRight, ChevronDown,
-  Plus, FolderPlus, Star, X, RotateCw,
+  Plus, FolderPlus, Star, X, RotateCw, Edit3, Trash2
 } from 'lucide-react';
+import { openPath as openExternal } from '@tauri-apps/plugin-opener';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GraphView } from './GraphView';
 
@@ -18,19 +20,53 @@ interface FileInfo {
 
 /* ─── Single Row ─────────────────────────────────────────── */
 const FileRow: React.FC<{ file: FileInfo; depth: number }> = ({ file, depth }) => {
-  const { openFile, activeTab, toggleFavorite } = useStore();
+  const { openFile, activeTab, toggleFavorite, renameItem, deleteItem } = useStore();
   const [open, setOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(file.name.replace(/\.md$/, ''));
   const isActive = activeTab === file.path;
 
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (file.is_dir) setOpen(o => !o);
-    else openFile(file.path);
+    if (isEditing) return;
+    if (file.is_dir) {
+      setOpen(o => !o);
+    } else {
+      const name = file.name.toLowerCase();
+      if (!name.endsWith('.md')) {
+        const tid = toast.loading(`Opening ${file.name}…`);
+        try {
+          await openExternal(file.path);
+          toast.success(`Opened ${file.name}`, { id: tid });
+        } catch (err: any) {
+          console.error('openPath failed:', err);
+          toast.error(`Could not open: ${err?.message ?? err}`, { id: tid, duration: 8000 });
+        }
+      } else {
+        openFile(file.path);
+      }
+    }
   };
 
   const handleStar = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!file.is_dir) toggleFavorite(file.path);
+  };
+
+  const handleRename = async () => {
+    if (editValue.trim() && editValue !== file.name.replace(/\.md$/, '')) {
+       await renameItem(file.path, editValue.trim());
+    } else {
+       setEditValue(file.name.replace(/\.md$/, ''));
+    }
+    setIsEditing(false);
+  };
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm(`Are you sure you want to delete ${file.name}?`)) {
+      await deleteItem(file.path);
+    }
   };
 
   return (
@@ -46,16 +82,46 @@ const FileRow: React.FC<{ file: FileInfo; depth: number }> = ({ file, depth }) =
             : <FileText size={13} strokeWidth={1.5} />
           }
         </span>
-        <span className="file-row-name">{file.name.replace(/\.md$/, '')}</span>
-        {!file.is_dir && (
-          <button
-            className={`star-btn ${file.isFavorite ? 'is-starred' : ''}`}
-            onClick={handleStar}
-            title={file.isFavorite ? 'Unstar' : 'Star'}
-          >
-            <Star size={12} fill={file.isFavorite ? 'currentColor' : 'none'} />
-          </button>
+        
+        {isEditing ? (
+          <input 
+             className="inline-edit-input"
+             autoFocus
+             value={editValue}
+             onClick={e => e.stopPropagation()}
+             onChange={e => setEditValue(e.target.value)}
+             onBlur={() => handleRename()}
+             onKeyDown={e => {
+                if (e.key === 'Enter') handleRename();
+                if (e.key === 'Escape') { setIsEditing(false); setEditValue(file.name.replace(/\.md$/, '')); }
+             }}
+             style={{ flex: 1, background: 'transparent', border: 'none', color: 'inherit', outline: 'none', fontSize: 'inherit', fontFamily: 'inherit' }}
+          />
+        ) : (
+          <span className="file-row-name">{file.name.replace(/\.md$/, '')}</span>
         )}
+
+        <div className="file-row-actions">
+          {!isEditing && (
+            <>
+              <button className="action-btn" onClick={(e) => { e.stopPropagation(); setIsEditing(true); }} title="Rename">
+                <Edit3 size={11} />
+              </button>
+              <button className="action-btn" onClick={handleDelete} title="Delete">
+                <Trash2 size={11} />
+              </button>
+            </>
+          )}
+          {!file.is_dir && !isEditing && (
+            <button
+              className={`star-btn ${file.isFavorite ? 'is-starred' : ''}`}
+              onClick={handleStar}
+              title={file.isFavorite ? 'Unstar' : 'Star'}
+            >
+              <Star size={12} fill={file.isFavorite ? 'currentColor' : 'none'} />
+            </button>
+          )}
+        </div>
       </div>
 
       <AnimatePresence>

@@ -22,7 +22,68 @@ import {
   MoreHorizontal, Palette,
 } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
-import { readFile } from '@tauri-apps/plugin-fs';
+import { readFile, readTextFile } from '@tauri-apps/plugin-fs';
+import { convertFileSrc } from '@tauri-apps/api/core';
+
+/* ─────────────────────────────────────────────
+   Resolve a stored relative path (e.g. "assets/foo.mp4")
+   to a playable asset:// URL for the Tauri WebView
+────────────────────────────────────────────── */
+const resolveAssetSrc = (relPath: string): string => {
+  if (!relPath) return '';
+  if (relPath.startsWith('http') || relPath.startsWith('data:') || relPath.startsWith('asset://')) {
+    return relPath;
+  }
+  const vault = useStore.getState().vaultPath;
+  if (!vault) return relPath;
+  const sep = vault.includes('\\') ? '\\' : '/';
+  const absPath = `${vault}${sep}${relPath}`;
+  return convertFileSrc(absPath);
+};
+
+const NopesImage = Image.extend({
+  addNodeView() {
+    return ({ node }) => {
+      const relPath = node.attrs.src || '';
+      const isPdf  = /\.pdf$/i.test(relPath);
+      const isVideo = /\.(mp4|webm|mov)$/i.test(relPath);
+
+      let dom: HTMLElement;
+
+      if (isPdf) {
+        // ── PDF: full native iframe using WebKit's built-in PDF renderer ──
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'margin:1rem 0;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.4);';
+        
+        const iframe = document.createElement('iframe');
+        iframe.src = resolveAssetSrc(relPath);
+        iframe.style.cssText = 'width:100%;height:80vh;border:none;display:block;border-radius:8px;';
+        iframe.setAttribute('title', relPath.split(/[\/\\]/).pop() || 'PDF');
+        
+        wrapper.appendChild(iframe);
+        dom = wrapper;
+      } else if (isVideo) {
+        // ── Video: native <video> with controls ──────────────────────
+        dom = document.createElement('video');
+        const vid = dom as HTMLVideoElement;
+        vid.src = resolveAssetSrc(relPath);
+        vid.controls = true;
+        vid.loop = false;
+        vid.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
+      } else {
+        // ── Image ────────────────────────────────────────────────────
+        dom = document.createElement('img');
+        const img = dom as HTMLImageElement;
+        img.src = resolveAssetSrc(relPath);
+        if (node.attrs.alt)   img.alt   = node.attrs.alt;
+        if (node.attrs.title) img.title = node.attrs.title;
+        img.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
+      }
+
+      return { dom };
+    };
+  }
+});
 
 /* ─────────────────────────────────────────────
    WikiLink suggestion list
@@ -35,6 +96,7 @@ const SuggestionList = React.forwardRef<any, any>((props, ref) => {
   };
   React.useImperativeHandle(ref, () => ({
     onKeyDown({ event }: { event: KeyboardEvent }) {
+      if (!props.items.length) return false;
       if (event.key === 'ArrowUp')   { setSel(s => (s + props.items.length - 1) % props.items.length); return true; }
       if (event.key === 'ArrowDown') { setSel(s => (s + 1) % props.items.length); return true; }
       if (event.key === 'Enter')     { pick(sel); return true; }
@@ -58,6 +120,57 @@ const SuggestionList = React.forwardRef<any, any>((props, ref) => {
 ───────────────────────────────────────────── */
 const WikiLinkExtension = Extension.create({
   name: 'wikiLink',
+  addOptions() { return { suggestion: {} as SuggestionOptions }; },
+  addProseMirrorPlugins() {
+    return [Suggestion({ editor: this.editor, ...this.options.suggestion })];
+  },
+});
+
+/* ─────────────────────────────────────────────
+   Slash Commands
+───────────────────────────────────────────── */
+const COMMAND_ITEMS = [
+  { title: 'Heading 1', icon: <Heading1 size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 1 }).run() },
+  { title: 'Heading 2', icon: <Heading2 size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 2 }).run() },
+  { title: 'Heading 3', icon: <Heading3 size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run() },
+  { title: 'Bold', icon: <Bold size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setMark('bold').run() },
+  { title: 'Italic', icon: <Italic size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setMark('italic').run() },
+  { title: 'Bullet List', icon: <List size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleBulletList().run() },
+  { title: 'Numbered List', icon: <ListOrdered size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleOrderedList().run() },
+  { title: 'Quote', icon: <Quote size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleBlockquote().run() },
+  { title: 'Code Block', icon: <Code size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleCodeBlock().run() },
+  { title: 'Divider', icon: <Minus size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setHorizontalRule().run() },
+];
+
+const SlashCommandList = React.forwardRef<any, any>((props, ref) => {
+  const [sel, setSel] = useState(0);
+  const pick = (i: number) => {
+    const item = props.items[i];
+    if (item) props.command(item);
+  };
+  React.useImperativeHandle(ref, () => ({
+    onKeyDown({ event }: { event: KeyboardEvent }) {
+      if (!props.items.length) return false;
+      if (event.key === 'ArrowUp')   { setSel(s => (s + props.items.length - 1) % props.items.length); return true; }
+      if (event.key === 'ArrowDown') { setSel(s => (s + 1) % props.items.length); return true; }
+      if (event.key === 'Enter')     { pick(sel); return true; }
+      return false;
+    },
+  }));
+  if (!props.items.length) return null;
+  return (
+    <div className="suggestion-list">
+      {props.items.map((item: any, i: number) => (
+        <button key={i} className={`suggestion-item ${i === sel ? 'is-selected' : ''}`} onClick={() => pick(i)} onMouseDown={e => e.preventDefault()}>
+          <span style={{ marginRight: 6, display: 'flex', alignItems: 'center' }}>{item.icon}</span> {item.title}
+        </button>
+      ))}
+    </div>
+  );
+});
+
+const SlashCommandExtension = Extension.create({
+  name: 'slashCommand',
   addOptions() { return { suggestion: {} as SuggestionOptions }; },
   addProseMirrorPlugins() {
     return [Suggestion({ editor: this.editor, ...this.options.suggestion })];
@@ -235,7 +348,10 @@ const LinkModal: React.FC<{
    Main NoteEditor
 ───────────────────────────────────────────── */
 export const NoteEditor: React.FC = () => {
-  const { allFiles, activeTab, tabContents, saveFile, openFile, createFile } = useStore();
+  const { 
+    allFiles, activeTab, tabContents, saveFile, openFile, createFile, graphData,
+    pendingAssetInserts, setPendingAssetInserts 
+  } = useStore();
   const [saving, setSaving] = useState(false);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [existingLink, setExistingLink] = useState<string | undefined>();
@@ -248,6 +364,41 @@ export const NoteEditor: React.FC = () => {
   const content = activeTab ? (tabContents[activeTab] ?? '') : '';
   useEffect(() => { allFilesRef.current = allFiles; }, [allFiles]);
 
+  const fileName = activeTab?.split('/').pop()?.replace(/\.md$/, '') ?? 'Untitled';
+  const backlinks = graphData.links.filter(l => l.target === activeTab);
+  const backlinksFiles = backlinks.map(l => allFiles.find(f => f.path === l.source)).filter((f): f is any => Boolean(f));
+
+  const [unlinkedMentions, setUnlinkedMentions] = useState<typeof allFiles>([]);
+
+  useEffect(() => {
+    if (!activeTab || !fileName) {
+      setUnlinkedMentions([]);
+      return;
+    }
+    let cancel = false;
+    const computeUnlinked = async () => {
+      const mentions: typeof allFiles = [];
+      const lowerName = fileName.toLowerCase();
+      
+      for (const f of allFiles) {
+        if (f.path === activeTab) continue;
+        if (backlinksFiles.find(b => b.path === f.path)) continue;
+        
+        let text = tabContents[f.path];
+        if (text === undefined) {
+           try { text = await readTextFile(f.path); } catch { text = ''; }
+        }
+        
+        if (text.toLowerCase().includes(lowerName)) {
+           mentions.push(f);
+        }
+      }
+      if (!cancel) setUnlinkedMentions(mentions);
+    };
+    computeUnlinked();
+    return () => { cancel = true; };
+  }, [activeTab, fileName, allFiles, backlinksFiles, tabContents]);
+
   const insertImage = async (editor: ReturnType<typeof useEditor>) => {
     if (!editor) return;
     const selected = await open({ multiple: false, filters: [{ name: 'Image', extensions: ['png','jpg','jpeg','gif','webp','svg'] }] });
@@ -256,8 +407,13 @@ export const NoteEditor: React.FC = () => {
       const bytes = await readFile(selected as string);
       const ext = (selected as string).split('.').pop()?.toLowerCase() ?? 'png';
       const mime = ext === 'svg' ? 'image/svg+xml' : `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-      const base64 = btoa(String.fromCharCode(...Array.from(bytes)));
-      editor.chain().focus().setImage({ src: `data:${mime};base64,${base64}` }).run();
+      
+      const blob = new Blob([bytes], { type: mime });
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        editor.chain().focus().setImage({ src: reader.result as string }).run();
+      };
+      reader.readAsDataURL(blob);
     } catch(e) { console.error('Image insert error:', e); }
   };
 
@@ -268,7 +424,7 @@ export const NoteEditor: React.FC = () => {
         Underline,
         TextStyle,
         Color,
-        Image.configure({ allowBase64: true }),
+        NopesImage.configure({ allowBase64: true }),
         LinkExtension.configure({ openOnClick: false }),
         Placeholder.configure({ placeholder: 'Start writing…' }),
         Markdown.configure({ transformCopiedText: false, transformPastedText: false }),
@@ -278,8 +434,17 @@ export const NoteEditor: React.FC = () => {
             char: '[[',
             allowSpaces: true,
             startOfLine: false,
+            allow: ({ editor, range }: any) => {
+              try {
+                if (range.from < 0 || range.to > editor.state.doc.content.size) return false;
+                const text = editor.state.doc.textBetween(range.from, range.to);
+                return !text.includes(']]');
+              } catch (e) {
+                return false;
+              }
+            },
             command: ({ editor, range, props }: any) => {
-              editor.chain().focus().deleteRange(range).insertContent(`[[${props.id}]]`).run();
+              editor.chain().focus().deleteRange(range).insertContent(`[[${props.id}]] `).run();
             },
             items: ({ query }: { query: string }) =>
               allFilesRef.current
@@ -303,6 +468,39 @@ export const NoteEditor: React.FC = () => {
                   return (component.ref as any)?.onKeyDown(p) ?? false;
                 },
                 onExit: () => { popup[0]?.destroy(); component.destroy(); },
+              };
+            },
+          },
+        }),
+        SlashCommandExtension.configure({
+          suggestion: {
+            pluginKey: new PluginKey('slashCommandSuggestion'),
+            char: '/',
+            startOfLine: false,
+            command: ({ editor, range, props }: any) => {
+              props.command({ editor, range });
+            },
+            items: ({ query }: { query: string }) =>
+              COMMAND_ITEMS.filter(item => item.title.toLowerCase().includes(query.toLowerCase())).slice(0, 10),
+            render: () => {
+              let component: ReactRenderer, popup: Instance[];
+              return {
+                onStart: (p: any) => {
+                  component = new ReactRenderer(SlashCommandList, { props: p, editor: p.editor });
+                  if (!p.clientRect) return;
+                  popup = tippy('body', {
+                    getReferenceClientRect: p.clientRect,
+                    appendTo: () => document.body,
+                    content: component.element,
+                    showOnCreate: true, interactive: true, trigger: 'manual', placement: 'bottom-start',
+                  });
+                },
+                onUpdate: (p: any) => { component.updateProps(p); popup?.[0]?.setProps({ getReferenceClientRect: p.clientRect }); },
+                onKeyDown: (p: any) => {
+                  if (p.event.key === 'Escape') { popup?.[0]?.hide(); return true; }
+                  return (component.ref as any)?.onKeyDown(p) ?? false;
+                },
+                onExit: () => { popup?.[0]?.destroy(); component?.destroy(); },
               };
             },
           },
@@ -331,6 +529,17 @@ export const NoteEditor: React.FC = () => {
       editor.commands.setContent(content, { emitUpdate: false } as any);
     }
   }, [activeTab, content]);
+
+  // Auto-insert dragged assets
+  useEffect(() => {
+    if (editor && pendingAssetInserts.length > 0) {
+      pendingAssetInserts.forEach(pth => {
+        // TipTap Image Extension syntax -> inserts the logical path natively into the doc.
+        editor.chain().focus().setImage({ src: pth }).run();
+      });
+      setPendingAssetInserts([]);
+    }
+  }, [editor, pendingAssetInserts, setPendingAssetInserts]);
 
   // Tippy delegation
   useEffect(() => {
@@ -389,7 +598,6 @@ export const NoteEditor: React.FC = () => {
   }, [editor]);
 
   if (!activeTab) return null;
-  const fileName = activeTab.split('/').pop()?.replace(/\.md$/, '') ?? 'Untitled';
 
   return (
     <div className="editor-shell">
@@ -414,10 +622,42 @@ export const NoteEditor: React.FC = () => {
         }}
       />
 
-      <div className="editor-scroll">
+      <div 
+        className="editor-scroll"
+        onClick={(e) => {
+          if ((e.target as HTMLElement).classList.contains('editor-scroll') || (e.target as HTMLElement).classList.contains('editor-body')) {
+            editor?.commands.focus('end');
+          }
+        }}
+      >
         <div className="editor-body">
           <div className="note-title">{fileName}</div>
           <EditorContent editor={editor} />
+          
+          {(backlinksFiles.length > 0 || unlinkedMentions.length > 0) && (
+            <div className="backlinks-pane">
+              {backlinksFiles.length > 0 && (
+                <>
+                  <div className="backlinks-header">Linked Mentions</div>
+                  {backlinksFiles.map(f => (
+                    <div key={f.path} className="backlink-item" onClick={() => storeActionsRef.current.openFile(f.path)}>
+                      <FileText size={14} /> <span>{f.name.replace(/\.md$/, '')}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+              {unlinkedMentions.length > 0 && (
+                <>
+                  <div className="backlinks-header" style={{ marginTop: backlinksFiles.length > 0 ? 12 : 0, color: 'var(--tx-3)' }}>Unlinked Mentions</div>
+                  {unlinkedMentions.map(f => (
+                    <div key={f.path} className="backlink-item unlinked" onClick={() => storeActionsRef.current.openFile(f.path)}>
+                      <FileText size={14} style={{ opacity: 0.5 }} /> <span style={{ opacity: 0.7 }}>{f.name.replace(/\.md$/, '')}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
