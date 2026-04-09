@@ -9,9 +9,11 @@ import {
   mkdir, 
   remove,
   rename,
-  exists
+  exists,
+  stat
 } from '@tauri-apps/plugin-fs';
 import { toast } from 'react-hot-toast';
+import { AIService } from '../workers/AIService';
 
 export interface FileInfo {
   name: string;
@@ -48,7 +50,14 @@ interface AppState {
   isSidebarOpen: boolean;
   isRefreshing: boolean;
   graphData: GraphData;
-  viewMode: 'editor' | 'graph';
+  viewMode: 'editor' | 'graph' | 'journal';
+
+  // Journal / Heatmap
+  journalStats: Record<string, number>; // 'YYYY-MM-DD' -> word count
+
+  // AI Semantic Search & API Key
+  aiIndex: { path: string; label: string; vec: Float32Array }[];
+  aiApiKey: string | null;
 
   // ── Actions ──
   setVaultPath: (path: string) => Promise<void>;
@@ -69,9 +78,12 @@ interface AppState {
 
   loadGraphData: (override?: { path: string; text: string }) => Promise<void>;
   setSidebarOpen: (v: boolean) => void;
-  setViewMode: (mode: 'editor' | 'graph') => void;
+  setViewMode: (mode: 'editor' | 'graph' | 'journal') => void;
   
   createNodeFromGraph: () => Promise<void>;
+  computeJournalStats: () => Promise<void>;
+  buildAiIndex: () => Promise<void>;
+  setAiApiKey: (key: string) => void;
 
   // File conversion/import
   importFiles: (paths: string[]) => Promise<void>;
@@ -122,6 +134,9 @@ export const useStore = create<AppState>((set, get) => ({
   isRefreshing: false,
   graphData: { nodes: [], links: [] },
   viewMode: 'editor',
+  journalStats: {},
+  aiIndex: [],
+  aiApiKey: localStorage.getItem('nopes_ai_key'),
 
   activeContent: () => {
     const { activeTab, tabContents } = get();
@@ -190,6 +205,7 @@ export const useStore = create<AppState>((set, get) => ({
 
       set({ files: filteredTree, allFiles: filteredFlatList });
       console.log('Scan complete. Found:', filteredFlatList.length, 'notes.');
+      get().buildAiIndex();
       
       // Auto-convert any docx found in the scan
       for (const f of fullFlatList) {
@@ -425,6 +441,81 @@ export const useStore = create<AppState>((set, get) => ({
     const id = Math.random().toString(36).substring(2, 6).toUpperCase();
     const name = `Untitled-${id}`;
     await get().createFile(name);
+  },
+
+  computeJournalStats: async () => {
+    const { allFiles, tabContents } = get();
+    const result: Record<string, number> = {};
+
+    const countWords = (text: string) =>
+      text.trim() ? text.trim().split(/\s+/).length : 0;
+
+    for (const f of allFiles) {
+      if (f.is_dir || !f.name.endsWith('.md')) continue;
+
+      const name = f.name.replace(/\.md$/, '');
+      let dateKey: string | null = null;
+
+      // Primary: filename is already YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(name)) {
+        dateKey = name;
+      } else {
+        // Fallback: use file birthtime/mtime from stat
+        try {
+          const info = await stat(f.path);
+          const ts = info.birthtime ?? info.mtime;
+          if (ts) {
+            const d = new Date(ts);
+            dateKey = d.toISOString().slice(0, 10);
+          }
+        } catch { /* non-critical */ }
+      }
+
+      if (!dateKey) continue;
+
+      let text = tabContents[f.path];
+      if (!text) {
+        try { text = await readTextFile(f.path); } catch { continue; }
+      }
+
+      result[dateKey] = (result[dateKey] ?? 0) + countWords(text);
+    }
+
+    set({ journalStats: result });
+  },
+
+  buildAiIndex: async () => {
+    const { allFiles, tabContents } = get();
+    const docsToEmbed: { path: string; text: string }[] = [];
+    
+    for (const f of allFiles) {
+      if (f.is_dir || !f.name.endsWith('.md')) continue;
+      let text = tabContents[f.path];
+      if (!text) {
+        try { text = await readTextFile(f.path); } catch { continue; }
+      }
+      if (text.trim().length > 10) {
+        docsToEmbed.push({ path: f.path, text });
+      }
+    }
+
+    if (!docsToEmbed.length) return;
+    try {
+      const results = await AIService.embedDocs(docsToEmbed);
+      const newIndex = results.map(r => ({
+        path: r.path,
+        label: r.path.split(/[\\/]/).pop()?.replace(/\.md$/, '') ?? 'Note',
+        vec: r.vec
+      }));
+      set({ aiIndex: newIndex });
+    } catch (err) {
+      console.error('Failed to build AI index:', err);
+    }
+  },
+
+  setAiApiKey: (key: string) => {
+    localStorage.setItem('nopes_ai_key', key);
+    set({ aiApiKey: key });
   },
 
   convertDocx: async (fullPath, dir, silent = false) => {

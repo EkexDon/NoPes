@@ -3,16 +3,18 @@ import { Sidebar } from './components/Sidebar';
 import { NoteEditor } from './components/NoteEditor';
 import { GraphView } from './components/GraphView';
 import { CommandBar } from './components/CommandBar';
+import { JournalView } from './components/JournalView';
 import { useStore } from './store/useStore';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   FileText, Share2, Search, Settings,
   PanelLeftClose, PanelLeftOpen, Plus, X,
-  Shield, Palette, Keyboard,
+  Shield, Palette, Keyboard, CalendarDays, Bot
 } from 'lucide-react';
 import { useKBar } from 'kbar';
 import { Toaster } from 'react-hot-toast';
+import { VaultChat } from './components/VaultChat';
 
 /* ─── Error Boundary ─────────────────────────────────────── */
 class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
@@ -166,8 +168,14 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
         <button className={`icon-btn ${viewMode === 'graph' ? 'active' : ''}`} onClick={() => setViewMode('graph')} title="Graph (⌘G)">
           <Share2 size={18} />
         </button>
+        <button className={`icon-btn ${viewMode === 'journal' ? 'active' : ''}`} onClick={() => setViewMode('journal')} title="Journal (⌘J)">
+          <CalendarDays size={18} />
+        </button>
         <button className="icon-btn" onClick={() => query.toggle()} title="Search (⌘K)">
           <Search size={18} />
+        </button>
+        <button className="icon-btn" onClick={() => document.dispatchEvent(new CustomEvent('toggle-chat'))} title="Vault Chat">
+          <Bot size={18} />
         </button>
         <button className="icon-btn" onClick={() => setSidebarOpen(!isSidebarOpen)} title="Toggle Sidebar (⌘B)">
           {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
@@ -209,6 +217,7 @@ const EmptyState: React.FC = () => (
 const App: React.FC = () => {
   const { vaultPath, setVaultPath, activeTab, viewMode, isSidebarOpen, setSidebarOpen, setViewMode, createFile, closeTab, loadGraphData, loadFiles, importFiles } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   // Restore vault from storage on mount
   useEffect(() => {
@@ -230,6 +239,7 @@ const App: React.FC = () => {
         case 'b': e.preventDefault(); setSidebarOpen(!isSidebarOpen); break;
         case 'e': e.preventDefault(); setViewMode('editor'); break;
         case 'g': e.preventDefault(); setViewMode('graph'); break;
+        case 'j': e.preventDefault(); setViewMode('journal'); break;
         case 'n': e.preventDefault(); createFile('Untitled'); break;
         case 'w': e.preventDefault(); if (activeTab) closeTab(activeTab); break;
       }
@@ -252,12 +262,16 @@ const App: React.FC = () => {
       }
     });
 
+    const onToggleChat = () => setChatOpen(o => !o);
+    document.addEventListener('toggle-chat', onToggleChat);
+
     return () => {
       unlisten.then(fn => fn());
+      document.removeEventListener('toggle-chat', onToggleChat);
     };
   }, [importFiles]);
 
-  const showGraph  = vaultPath && viewMode === 'graph';
+
 
   return (
     <ErrorBoundary>
@@ -277,8 +291,10 @@ const App: React.FC = () => {
           <main className="main-content">
             {!vaultPath ? (
               <WelcomeScreen onOpen={handleOpenVault} />
-            ) : showGraph ? (
+            ) : viewMode === 'graph' ? (
               <GraphView />
+            ) : viewMode === 'journal' ? (
+              <JournalView />
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
                 <TabBar />
@@ -286,6 +302,7 @@ const App: React.FC = () => {
               </div>
             )}
           </main>
+          {vaultPath && chatOpen && <VaultChat onClose={() => setChatOpen(false)} />}
         </div>
         {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       </CommandBar>

@@ -13,14 +13,13 @@ import tippy, { Instance, delegate } from 'tippy.js';
 import 'tippy.js/dist/tippy.css';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { useStore } from '../store/useStore';
 import {
-  Bold, Italic, Underline as UnderlineIcon, Strikethrough,
-  Link as LinkIcon, Image as ImageIcon, FileText,
-  Heading1, Heading2, Heading3,
-  List, ListOrdered, Quote, Code, Minus,
-  MoreHorizontal, Palette,
+  Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Link as LinkIcon,
+  Image as ImageIcon, List, ListOrdered, Quote, Code, MoreHorizontal,
+  Minus, FileText, Underline as UnderlineIcon, Palette, Sparkles, Hash
 } from 'lucide-react';
+import { useStore, extractTags } from '../store/useStore';
+import { AIService } from '../workers/AIService';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { convertFileSrc } from '@tauri-apps/api/core';
@@ -350,11 +349,13 @@ const LinkModal: React.FC<{
 export const NoteEditor: React.FC = () => {
   const { 
     allFiles, activeTab, tabContents, saveFile, openFile, createFile, graphData,
-    pendingAssetInserts, setPendingAssetInserts 
+    pendingAssetInserts, setPendingAssetInserts, aiIndex 
   } = useStore();
   const [saving, setSaving] = useState(false);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [existingLink, setExistingLink] = useState<string | undefined>();
+  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
+  const [aiStatus, setAiStatus] = useState('idle');
   const allFilesRef = useRef(allFiles);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
@@ -367,6 +368,34 @@ export const NoteEditor: React.FC = () => {
   const fileName = activeTab?.split('/').pop()?.replace(/\.md$/, '') ?? 'Untitled';
   const backlinks = graphData.links.filter(l => l.target === activeTab);
   const backlinksFiles = backlinks.map(l => allFiles.find(f => f.path === l.source)).filter((f): f is any => Boolean(f));
+
+  // AI Tag Suggestions
+  useEffect(() => {
+    const unsub = AIService.onStatus(setAiStatus);
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (aiStatus !== 'ready' || content.length < 50 || !aiIndex.length) return;
+    const to = setTimeout(async () => {
+      try {
+        const qVec = await AIService.embedQuery(content);
+        const hits = await AIService.search(qVec, aiIndex, 5);
+        const tags = new Set<string>();
+        for (const h of hits) {
+          if (h.score < 0.25 || h.path === activeTab) continue;
+          const text = tabContents[h.path];
+          if (text) {
+            extractTags(text).forEach(t => tags.add(t));
+          }
+        }
+        const currentTags = new Set(extractTags(content));
+        const newTags = Array.from(tags).filter(t => !currentTags.has(t)).slice(0, 4);
+        setSuggestedTags(newTags);
+      } catch {}
+    }, 1500);
+    return () => clearTimeout(to);
+  }, [content, aiIndex, aiStatus, activeTab, tabContents]);
 
   const [unlinkedMentions, setUnlinkedMentions] = useState<typeof allFiles>([]);
 
@@ -636,6 +665,29 @@ export const NoteEditor: React.FC = () => {
           
           {(backlinksFiles.length > 0 || unlinkedMentions.length > 0) && (
             <div className="backlinks-pane">
+              
+              {suggestedTags.length > 0 && (
+                <div className="ai-tag-suggestions">
+                  <div className="backlinks-header" style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--accent)' }}>
+                    <Sparkles size={12} /> AI Suggestions
+                  </div>
+                  <div className="ai-tags-row">
+                    {suggestedTags.map(t => (
+                      <button 
+                        key={t} 
+                        className="ai-tag-chip"
+                        onClick={() => {
+                          if (editor) editor.chain().focus('end').insertContent(`\n#${t} `).run();
+                          setSuggestedTags(prev => prev.filter(x => x !== t));
+                        }}
+                      >
+                        <Hash size={11} /> {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {backlinksFiles.length > 0 && (
                 <>
                   <div className="backlinks-header">Linked Mentions</div>
