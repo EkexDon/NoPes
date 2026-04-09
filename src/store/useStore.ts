@@ -28,6 +28,12 @@ export interface Tab {
   label: string;
 }
 
+export interface MediaItem {
+  id: string;
+  type: 'image' | 'video';
+  src: string;
+}
+
 interface GraphData {
   nodes: { id: string; label: string; tags?: string[] }[];
   links: { source: string; target: string }[];
@@ -46,6 +52,8 @@ interface AppState {
 
   // Rich Media Assets awaiting insertion into the editor
   pendingAssetInserts: string[];
+  // Media assets (images, videos) awaiting insertion
+  media: MediaItem[];
 
   isSidebarOpen: boolean;
   isRefreshing: boolean;
@@ -75,6 +83,7 @@ interface AppState {
   toggleFavorite: (path: string) => void;
 
   setPendingAssetInserts: (assets: string[]) => void;
+  addMedia: (item: MediaItem) => void;
 
   loadGraphData: (override?: { path: string; text: string }) => Promise<void>;
   setSidebarOpen: (v: boolean) => void;
@@ -129,6 +138,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeTab: null,
   tabContents: {},
   pendingAssetInserts: [],
+  media: [],
 
   isSidebarOpen: true,
   isRefreshing: false,
@@ -391,6 +401,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
   
   setPendingAssetInserts: (assets) => set({ pendingAssetInserts: assets }),
+  addMedia: (item) => set(state => ({ media: [...state.media, item] })),
 
   toggleFavorite: (path) => {
     const { favorites } = get();

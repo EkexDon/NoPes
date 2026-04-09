@@ -16,9 +16,11 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import {
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Link as LinkIcon,
   Image as ImageIcon, List, ListOrdered, Quote, Code, MoreHorizontal,
-  Minus, FileText, Underline as UnderlineIcon, Palette, Sparkles, Hash
+  Minus, FileText, Underline as UnderlineIcon, Palette, Sparkles, Hash, Trash2
 } from 'lucide-react';
 import { useStore, extractTags } from '../store/useStore';
+import { writeFile, exists, mkdir } from '@tauri-apps/plugin-fs';
+import { join } from '@tauri-apps/api/path';
 import { AIService } from '../workers/AIService';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs';
@@ -561,16 +563,108 @@ export const NoteEditor: React.FC = () => {
 
   // Auto-insert dragged assets
   useEffect(() => {
-    if (editor && pendingAssetInserts.length > 0) {
-      pendingAssetInserts.forEach(pth => {
-        // TipTap Image Extension syntax -> inserts the logical path natively into the doc.
-        editor.chain().focus().setImage({ src: pth }).run();
-      });
-      setPendingAssetInserts([]);
-    }
-  }, [editor, pendingAssetInserts, setPendingAssetInserts]);
+  if (editor && pendingAssetInserts.length > 0) {
+    pendingAssetInserts.forEach(pth => {
+      // TipTap Image Extension syntax -> inserts the logical path natively into the doc.
+      editor.chain().focus().setImage({ src: pth }).run();
+    });
+    setPendingAssetInserts([]);
+  }
+}, [editor, pendingAssetInserts, setPendingAssetInserts]);
 
-  // Tippy delegation
+// Drag-and-drop handler (used via JSX props on editor-body)
+const [isDragOver, setIsDragOver] = useState(false);
+
+const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+  setIsDragOver(true);
+};
+
+const handleDragLeave = () => setIsDragOver(false);
+
+const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+  e.preventDefault();
+  setIsDragOver(false);
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+  const assetsDir = await join(useStore.getState().vaultPath || '', 'assets');
+  if (!(await exists(assetsDir))) {
+    await mkdir(assetsDir);
+  }
+  const newInserts: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    if (!['png','jpg','jpeg','gif','webp','svg','mp4','webm','mov','pdf'].includes(ext)) continue;
+    const arrayBuf = await file.arrayBuffer();
+    const uint8 = new Uint8Array(arrayBuf);
+    const uniqueName = `${Date.now()}_${file.name}`;
+    const targetPath = await join(assetsDir, uniqueName);
+    await writeFile(targetPath, uint8);
+    const relPath = 'assets/' + uniqueName;
+    newInserts.push(relPath);
+    useStore.getState().addMedia({
+      id: `${Date.now()}_${i}`,
+      type: ['mp4','webm','mov'].includes(ext) ? 'video' : 'image',
+      src: relPath,
+    });
+  }
+  if (newInserts.length) {
+    setPendingAssetInserts([...pendingAssetInserts, ...newInserts]);
+  }
+};
+
+// ── Context menu for media elements ───────────────────────
+type CtxMenu = { x: number; y: number; domNode: HTMLElement } | null;
+const [ctxMenu, setCtxMenu] = useState<CtxMenu>(null);
+
+const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+  const target = e.target as HTMLElement;
+  // Walk up to find img / video / iframe
+  const media = target.closest('img, video, iframe') as HTMLElement | null;
+  if (!media) return; // not a media element — let browser handle it
+  e.preventDefault();
+  setCtxMenu({ x: e.clientX, y: e.clientY, domNode: media });
+};
+
+const closeCtxMenu = () => setCtxMenu(null);
+
+const deleteMediaNode = () => {
+  if (!editor || !ctxMenu) return;
+  try {
+    const view = editor.view;
+    // Walk up from the clicked DOM element to find the node wrapper
+    let node: HTMLElement | null = ctxMenu.domNode;
+    // For PDFs the actual node dom is the wrapper div
+    if (node.tagName === 'IFRAME') node = node.parentElement;
+    if (!node) return;
+    const pos = view.posAtDOM(node, 0);
+    const $pos = view.state.doc.resolve(pos);
+    const nodeAt = view.state.doc.nodeAt($pos.pos);
+    if (nodeAt) {
+      const tr = view.state.tr.delete($pos.pos, $pos.pos + nodeAt.nodeSize);
+      view.dispatch(tr);
+    }
+  } catch (err) {
+    console.error('Delete media node error:', err);
+  }
+  closeCtxMenu();
+};
+
+// Dismiss context menu on Escape or outside click
+useEffect(() => {
+  if (!ctxMenu) return;
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeCtxMenu(); };
+  const onDown = () => closeCtxMenu();
+  document.addEventListener('keydown', onKey);
+  document.addEventListener('mousedown', onDown);
+  return () => {
+    document.removeEventListener('keydown', onKey);
+    document.removeEventListener('mousedown', onDown);
+  };
+}, [ctxMenu]);
+
   useEffect(() => {
     if (!editor) return;
     const instance = delegate(document.body, {
@@ -659,7 +753,13 @@ export const NoteEditor: React.FC = () => {
           }
         }}
       >
-        <div className="editor-body">
+        <div
+          className={`editor-body${isDragOver ? ' drag-over' : ''}`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onContextMenu={handleContextMenu}
+        >
           <div className="note-title">{fileName}</div>
           <EditorContent editor={editor} />
           
@@ -726,6 +826,23 @@ export const NoteEditor: React.FC = () => {
           }}
           onClose={() => setShowLinkModal(false)}
         />
+      )}
+
+      {/* ── Media context menu ── */}
+      {ctxMenu && (
+        <div
+          className="media-ctx-menu"
+          style={{ top: ctxMenu.y, left: ctxMenu.x }}
+          onMouseDown={e => e.stopPropagation()}
+        >
+          <button
+            className="media-ctx-item media-ctx-delete"
+            onClick={deleteMediaNode}
+          >
+            <Trash2 size={13} />
+            Delete
+          </button>
+        </div>
       )}
     </div>
   );

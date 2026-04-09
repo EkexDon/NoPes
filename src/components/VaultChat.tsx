@@ -234,7 +234,10 @@ ${contextStr}`
     if (ollamaStatus === 'error') return (
       <div className="vault-chat-warning">
         <AlertCircle size={13} />
-        <span>Could not start Ollama. Make sure it is installed: <code>brew install ollama</code></span>
+        <span>
+          Local AI engine (Ollama) not found. 
+          Please <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>download Ollama</a> or install via <code>brew install ollama</code>.
+        </span>
       </div>
     );
     if (ollamaStatus === 'ready' && aiStatus === 'loading') return (
