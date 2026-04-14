@@ -9,7 +9,7 @@ import { X, Save, RefreshCw } from 'lucide-react';
 const ExcalidrawComp = React.lazy(() => import('@excalidraw/excalidraw').then(mod => ({ default: mod.Excalidraw })));
 
 export const CanvasView: React.FC = () => {
-  const { activeTab, vaultPath, setViewMode } = useStore();
+  const { activeTab, vaultPath, setViewMode, allFiles, openFile } = useStore();
   const [initialData, setInitialData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -112,6 +112,20 @@ export const CanvasView: React.FC = () => {
                 theme="dark"
                 initialData={initialData || { appState: { theme: 'dark', viewBackgroundColor: '#0a0a0a' } }}
                 onChange={handleSave}
+                onLinkOpen={(element, event) => {
+                  let link = element.link || '';
+                  if (!link) return;
+                  if (link.startsWith('[[') && link.endsWith(']]')) {
+                    link = link.slice(2, -2);
+                  }
+                  const targetName = link.toLowerCase().replace(/\.md$/, '');
+                  const foundFile = allFiles.find(f => f.name.toLowerCase().replace(/\.md$/, '') === targetName);
+                  
+                  if (foundFile) {
+                    event.preventDefault();
+                    openFile(foundFile.path).then(() => setViewMode('editor'));
+                  }
+                }}
               />
             </Suspense>
           )}
