@@ -11,6 +11,8 @@ import Suggestion, { SuggestionOptions } from '@tiptap/suggestion';
 import { Markdown } from 'tiptap-markdown';
 import tippy, { Instance, delegate } from 'tippy.js';
 import 'tippy.js/dist/tippy.css';
+import { MathExtension } from '@aarkue/tiptap-math-extension';
+import 'katex/dist/katex.min.css';
 import { Node } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -18,6 +20,7 @@ import { Table } from '@tiptap/extension-table';
 import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
+import html2pdf from 'html2pdf.js';
 import mermaid from 'mermaid';
 import {
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Link as LinkIcon,
@@ -25,13 +28,13 @@ import {
   Minus, FileText, Underline as UnderlineIcon, Palette, Sparkles, Hash, Trash2,
   Search, X as XIcon, ChevronUp, ChevronDown,
   Grid3x3, LayoutTemplate, GitBranch,
-  RowsIcon, Columns, Trash, TableIcon, ChevronLeft, ChevronRight
+  RowsIcon, Columns, Trash, TableIcon, ChevronLeft, ChevronRight, Printer
 } from 'lucide-react';
 import { useStore, extractTags } from '../store/useStore';
 import { writeFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
 import { AIService } from '../workers/AIService';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { convertFileSrc } from '@tauri-apps/api/core';
 
@@ -402,9 +405,9 @@ const SlashCommandExtension = Extension.create({
   },
 });
 
-/* \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+/* ─────────────────────────────────────────────
    WikiLink Decorator (Exact click & Hover)
-\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+───────────────────────────────────────────── */
 const wikiLinkPluginKey = new PluginKey('wikiLinkDecorator');
 
 const WikiLinkDecorator = Extension.create({
@@ -464,9 +467,9 @@ const WikiLinkDecorator = Extension.create({
   },
 });
 
-/* \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+/* ─────────────────────────────────────────────
    Toolbar Button Helper
-\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+───────────────────────────────────────────── */
 const TBtn: React.FC<{
   active?: boolean; title: string; onClick: () => void; children: React.ReactNode;
 }> = ({ active, title, onClick, children }) => (
@@ -482,9 +485,9 @@ const TBtn: React.FC<{
 
 const Divider = () => <div className="toolbar-divider" />;
 
-/* \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+/* ─────────────────────────────────────────────
    Table Floating Toolbar
-\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+───────────────────────────────────────────── */
 const TableToolbar: React.FC<{ editor: ReturnType<typeof useEditor> }> = ({ editor }) => {
   if (!editor || !editor.isActive('table')) return null;
   const c = editor.chain().focus();
@@ -506,9 +509,9 @@ const TableToolbar: React.FC<{ editor: ReturnType<typeof useEditor> }> = ({ edit
   );
 };
 
-/* \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+/* ─────────────────────────────────────────────
    Formatting Toolbar
-\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+───────────────────────────────────────────── */
 const Toolbar: React.FC<{
   editor: ReturnType<typeof useEditor>;
   onInsertImage: () => void;
@@ -655,11 +658,13 @@ const SearchBar: React.FC<{
 /* ─────────────────────────────────────────────
    Main NoteEditor
 ───────────────────────────────────────────── */
-export const NoteEditor: React.FC = () => {
+export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const { 
     allFiles, activeTab, tabContents, saveFile, openFile, createFile, graphData,
     pendingAssetInserts, setPendingAssetInserts, aiIndex 
   } = useStore();
+  
+  const currentTab = tabId || activeTab;
   const [saving, setSaving] = useState(false);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [existingLink, setExistingLink] = useState<string | undefined>();
@@ -678,11 +683,11 @@ export const NoteEditor: React.FC = () => {
   const storeActionsRef = useRef({ openFile, createFile });
   useEffect(() => { storeActionsRef.current = { openFile, createFile }; }, [openFile, createFile]);
 
-  const content = activeTab ? (tabContents[activeTab] ?? '') : '';
+  const content = currentTab ? (tabContents[currentTab] ?? '') : '';
   useEffect(() => { allFilesRef.current = allFiles; }, [allFiles]);
 
-  const fileName = activeTab?.split('/').pop()?.replace(/\.md$/, '') ?? 'Untitled';
-  const backlinks = graphData.links.filter(l => l.target === activeTab);
+  const fileName = currentTab?.split('/').pop()?.replace(/\.md$/, '') ?? 'Untitled';
+  const backlinks = graphData.links.filter(l => l.target === currentTab);
   const backlinksFiles = backlinks.map(l => allFiles.find(f => f.path === l.source)).filter((f): f is any => Boolean(f));
 
   // AI Tag Suggestions
@@ -699,7 +704,7 @@ export const NoteEditor: React.FC = () => {
         const hits = await AIService.search(qVec, aiIndex, 5);
         const tags = new Set<string>();
         for (const h of hits) {
-          if (h.score < 0.25 || h.path === activeTab) continue;
+          if (h.score < 0.25 || h.path === currentTab) continue;
           const text = tabContents[h.path];
           if (text) {
             extractTags(text).forEach(t => tags.add(t));
@@ -711,12 +716,12 @@ export const NoteEditor: React.FC = () => {
       } catch {}
     }, 1500);
     return () => clearTimeout(to);
-  }, [content, aiIndex, aiStatus, activeTab, tabContents]);
+  }, [content, aiIndex, aiStatus, currentTab, tabContents]);
 
   const [unlinkedMentions, setUnlinkedMentions] = useState<typeof allFiles>([]);
 
   useEffect(() => {
-    if (!activeTab || !fileName) {
+    if (!currentTab || !fileName) {
       setUnlinkedMentions([]);
       return;
     }
@@ -726,7 +731,7 @@ export const NoteEditor: React.FC = () => {
       const lowerName = fileName.toLowerCase();
       
       for (const f of allFiles) {
-        if (f.path === activeTab) continue;
+        if (f.path === currentTab) continue;
         if (backlinksFiles.find(b => b.path === f.path)) continue;
         
         let text = tabContents[f.path];
@@ -742,7 +747,7 @@ export const NoteEditor: React.FC = () => {
     };
     computeUnlinked();
     return () => { cancel = true; };
-  }, [activeTab, fileName, allFiles, backlinksFiles, tabContents]);
+  }, [currentTab, fileName, allFiles, backlinksFiles, tabContents]);
 
   const insertImage = async (editor: ReturnType<typeof useEditor>) => {
     if (!editor) return;
@@ -771,6 +776,7 @@ export const NoteEditor: React.FC = () => {
         TableHeader,
         TableCell,
         MermaidExtension,
+        MathExtension.configure({ evaluation: false }),
         Underline,
         TextStyle,
         Color,
@@ -858,17 +864,21 @@ export const NoteEditor: React.FC = () => {
       ],
       content,
       onUpdate: ({ editor }) => {
-        if (!activeTab) return;
+        if (!currentTab) return;
         const md = (editor.storage as any).markdown.getMarkdown();
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         setSaving(true);
         saveTimerRef.current = setTimeout(() => {
-          saveFile(activeTab, md).finally(() => setTimeout(() => setSaving(false), 600));
+          saveFile(currentTab, md).finally(() => setTimeout(() => setSaving(false), 600));
         }, 400);
       },
-      editorProps: {},
+      editorProps: {
+        attributes: {
+          spellcheck: 'false',
+        },
+      },
     },
-    [activeTab],
+    [currentTab],
   );
 
   // Sync content when tab changes
@@ -878,7 +888,7 @@ export const NoteEditor: React.FC = () => {
     if (curr !== content) {
       editor.commands.setContent(content, { emitUpdate: false } as any);
     }
-  }, [activeTab, content]);
+  }, [currentTab, content]);
 
   // Auto-insert dragged assets
   useEffect(() => {
@@ -1098,14 +1108,14 @@ useEffect(() => {
   // ── Cmd+F to open search ──────────────────────────────────────────────
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f' && activeTab) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f' && currentTab) {
         e.preventDefault();
         setShowSearch(true);
       }
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [activeTab]);
+  }, [currentTab]);
 
   useEffect(() => {
     if (!editor) return;
@@ -1162,7 +1172,7 @@ useEffect(() => {
     };
   }, [editor]);
 
-  if (!activeTab) return null;
+  if (!currentTab) return null;
 
   return (
     <div className="editor-shell">
@@ -1173,6 +1183,42 @@ useEffect(() => {
         </div>
         <div className="editor-topbar-right">
           <span className={`save-status ${saving ? 'saving' : ''}`}>{saving ? 'Saving…' : 'Saved'}</span>
+          <button className="icon-btn sm" onClick={async (e) => { 
+            e.preventDefault(); e.stopPropagation();
+            try {
+              const el = document.querySelector('.ProseMirror');
+              if (!el) return;
+              
+              // Add a temporary print class to ensure dark mode text shows up or handle styling
+              const opt = {
+                margin: 10,
+                filename: `${fileName}.pdf`,
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2, useCORS: true },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+              };
+              
+              // Request raw ArrayBuffer to circumvent WKWebView Blob <a> tag blocking
+              const pdfArrayBuffer = await html2pdf().set(opt).from(el).outputPdf('arraybuffer');
+              
+              // Prompt user for save location
+              const filePath = await save({
+                filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
+                defaultPath: `${fileName}.pdf`,
+                title: 'Export Virtual PDF',
+              });
+              
+              if (filePath) {
+                const uint8Array = new Uint8Array(pdfArrayBuffer);
+                await writeFile(filePath, uint8Array);
+                import('react-hot-toast').then(m => m.toast.success('Successfully exported PDF!'));
+              }
+            } catch (err) {
+              console.error("PDF Export failed", err);
+            }
+          }} title="Export to PDF (Print)">
+            <Printer size={15} />
+          </button>
           <button
             className={`icon-btn sm ${showSearch ? 'is-active' : ''}`}
             title="Find in note (⌘F)"

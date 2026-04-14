@@ -60,6 +60,15 @@ interface AppState {
   graphData: GraphData;
   viewMode: 'editor' | 'graph' | 'journal' | 'canvas';
 
+  // Split View Multi-Pane Support
+  isSplitView: boolean;
+  rightActiveTab: string | null;
+  rightViewMode: 'editor' | 'graph' | 'journal' | 'canvas';
+  setSplitView: (isSplit: boolean) => void;
+  setRightActiveTab: (path: string | null) => void;
+  setRightViewMode: (mode: 'editor' | 'graph' | 'journal' | 'canvas') => void;
+  toggleSplitView: () => void;
+
   // Journal / Heatmap
   journalStats: Record<string, number>; // 'YYYY-MM-DD' -> word count
 
@@ -144,6 +153,9 @@ export const useStore = create<AppState>((set, get) => ({
   isRefreshing: false,
   graphData: { nodes: [], links: [] },
   viewMode: 'editor',
+  isSplitView: false,
+  rightActiveTab: null,
+  rightViewMode: 'graph',
   journalStats: {},
   aiIndex: [],
   aiApiKey: localStorage.getItem('nopes_ai_key'),
@@ -152,6 +164,14 @@ export const useStore = create<AppState>((set, get) => ({
     const { activeTab, tabContents } = get();
     return activeTab ? (tabContents[activeTab] ?? '') : '';
   },
+
+  setSplitView: (v) => set({ isSplitView: v }),
+  setRightActiveTab: (path) => set({ rightActiveTab: path }),
+  setRightViewMode: (mode) => set({ rightViewMode: mode }),
+  toggleSplitView: () => set(s => ({ 
+    isSplitView: !s.isSplitView,
+    rightActiveTab: !s.isSplitView ? s.activeTab : s.rightActiveTab
+  })),
 
   setVaultPath: async (path) => {
     set({ vaultPath: path });

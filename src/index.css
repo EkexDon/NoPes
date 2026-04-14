@@ -2079,3 +2079,29 @@ button:disabled {
   border-top: none;
   margin-top: 0;
 }
+
+/* ─── PRINT / EXPORT STYLES ───────────────────────────────── */
+@media print {
+  .icon-sidebar, .sidebar, .editor-topbar, .note-tab-bar, .command-bar, .save-status, .ProseMirror-menubar {
+    display: none !important;
+  }
+  body, html, .app-container, .main-content, .editor-shell {
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+    color: black !important;
+  }
+  .ProseMirror {
+    color: black !important;
+    padding: 0 !important;
+  }
+  .ProseMirror a {
+    color: #0000ee !important;
+  }
+  img, svg, .katex {
+    page-break-inside: avoid;
+  }
+  @page {
+    margin: 2cm;
+  }
+}

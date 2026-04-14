@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { NoteEditor } from './components/NoteEditor';
 import { GraphView } from './components/GraphView';
@@ -157,7 +157,7 @@ const TabBar: React.FC = () => {
 
 /* ─── Icon Dock ──────────────────────────────────────────── */
 const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
-  const { viewMode, setViewMode, isSidebarOpen, setSidebarOpen } = useStore();
+  const { viewMode, setViewMode, isSidebarOpen, setSidebarOpen, isSplitView, toggleSplitView } = useStore();
   const { query } = useKBar();
 
   return (
@@ -171,6 +171,9 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
         </button>
         <button className={`icon-btn ${viewMode === 'graph' ? 'active' : ''}`} onClick={() => setViewMode('graph')} title="Graph (⌘G)">
           <Share2 size={18} />
+        </button>
+        <button className={`icon-btn ${isSplitView ? 'active' : ''}`} onClick={() => { import('react-hot-toast').then(m => m.toast('Split View: ' + (!isSplitView ? 'ON' : 'OFF'))); toggleSplitView(); }} title="Toggle Split View">
+          <PanelLeftOpen size={18} style={{ transform: 'rotate(180deg)' }} />
         </button>
         <button className={`icon-btn ${viewMode === 'journal' ? 'active' : ''}`} onClick={() => setViewMode('journal')} title="Journal (⌘J)">
           <CalendarDays size={18} />
@@ -219,9 +222,44 @@ const EmptyState: React.FC = () => (
 
 /* ─── App Root ───────────────────────────────────────────── */
 const App: React.FC = () => {
-  const { vaultPath, setVaultPath, activeTab, viewMode, isSidebarOpen, setSidebarOpen, setViewMode, createFile, closeTab, loadGraphData, loadFiles, importFiles } = useStore();
+  const { 
+    vaultPath, setVaultPath, activeTab, viewMode, isSidebarOpen, setSidebarOpen, 
+    setViewMode, createFile, closeTab, loadGraphData, loadFiles, importFiles,
+    isSplitView, rightActiveTab, rightViewMode
+  } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+
+  // Split View Resizer state
+  const [leftWidth, setLeftWidth] = useState(50);
+  const containerRef = useRef<HTMLElement>(null);
+  const dragRef = useRef({ startX: 0, startWidth: 0 });
+
+  const onDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!containerRef.current) return;
+    dragRef.current = { startX: e.clientX, startWidth: leftWidth };
+    const containerWidth = containerRef.current.getBoundingClientRect().width;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - dragRef.current.startX;
+      const deltaPercentage = (delta / containerWidth) * 100;
+      let newWidth = dragRef.current.startWidth + deltaPercentage;
+      if (newWidth < 20) newWidth = 20;
+      if (newWidth > 80) newWidth = 80;
+      setLeftWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    document.body.style.cursor = 'col-resize';
+  }, [leftWidth]);
 
   // Restore vault from storage on mount
   useEffect(() => {
@@ -293,20 +331,54 @@ const App: React.FC = () => {
         <div className="app-container">
           <IconDock onSettings={() => setSettingsOpen(true)} />
           {vaultPath && isSidebarOpen && <Sidebar />}
-          <main className="main-content">
+          <main className="main-content" ref={containerRef} style={{ display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
             {!vaultPath ? (
               <WelcomeScreen onOpen={handleOpenVault} />
-            ) : viewMode === 'graph' ? (
-              <GraphView />
-            ) : viewMode === 'journal' ? (
-              <JournalView />
-            ) : viewMode === 'canvas' ? (
-              <CanvasView />
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
-                <TabBar />
-                {activeTab ? <NoteEditor /> : <EmptyState />}
-              </div>
+              <>
+                {/* Left Pane */}
+                <div style={{ flex: isSplitView ? `0 0 ${leftWidth}%` : 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                  { viewMode === 'graph' ? <GraphView /> :
+                    viewMode === 'journal' ? <JournalView /> :
+                    viewMode === 'canvas' ? <CanvasView /> :
+                    (
+                      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                        <TabBar />
+                        {activeTab ? <NoteEditor tabId={activeTab} /> : <EmptyState />}
+                      </div>
+                    )
+                  }
+                </div>
+
+                {/* Resizer Handle */}
+                {isSplitView && (
+                  <div 
+                    onMouseDown={onDragStart}
+                    style={{ 
+                      width: '4px', 
+                      background: 'var(--bd-2)', 
+                      cursor: 'col-resize',
+                      zIndex: 50,
+                      transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--accent)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--bd-2)')}
+                  />
+                )}
+
+                {/* Right Pane */}
+                {isSplitView && (
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-0)' }}>
+                    { rightViewMode === 'graph' ? <GraphView /> :
+                      rightViewMode === 'journal' ? <JournalView /> :
+                      rightViewMode === 'canvas' ? <CanvasView /> :
+                      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                        {rightActiveTab ? <NoteEditor tabId={rightActiveTab} /> : <EmptyState />}
+                      </div>
+                    }
+                  </div>
+                )}
+              </>
             )}
           </main>
           {vaultPath && chatOpen && <VaultChat onClose={() => setChatOpen(false)} />}

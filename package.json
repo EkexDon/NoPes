@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@aarkue/tiptap-math-extension": "^1.4.0",
     "@excalidraw/excalidraw": "^0.18.0",
     "@huggingface/transformers": "^4.0.1",
     "@milkdown/core": "^7.20.0",
@@ -41,8 +42,11 @@
     "@tiptap/react": "^3.21.0",
     "@tiptap/starter-kit": "^3.21.0",
     "@tiptap/suggestion": "^3.21.0",
+    "@types/katex": "^0.16.8",
     "d3-force": "^3.0.0",
     "framer-motion": "^12.38.0",
+    "html2pdf.js": "^0.14.0",
+    "katex": "^0.16.45",
     "kbar": "^0.1.0-beta.48",
     "lucide-react": "^1.7.0",
     "mammoth": "^1.12.0",

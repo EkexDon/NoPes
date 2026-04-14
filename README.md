@@ -36,10 +36,28 @@ A professional table experience that doesn't suck.
 - **Header Toggling**: Quickly switch between standard and header cells.
 - **Excel-like Snappiness**: Built on the official TipTap table suite.
 
+### 🧮 Math / LaTeX Support
+Write beautiful equations natively.
+- **KaTeX Integration**: Highly-performant rendering for complex formulas.
+- **Block & Inline Math**: Use `$$` for centered blocks or `$` for inline expressions.
+- **Instant Preview**: Professional typesetting as you type.
+
+### 🌓 Split-View Workspace
+Two brains are better than one.
+- **Side-by-Side Editing**: Open two notes at once or view your Editor and Graph simultaneously.
+- **Draggable Resizer**: Fine-tune your workspace with a responsive, draggable middle bar.
+- **Persistent Layout**: Switch between views without losing your place.
+
+### 🖨️ High-Fidelity PDF Export
+Professional document generation.
+- **Pure PDF Logic**: Bypasses browser print limitations to generate clean, high-quality PDFs.
+- **Native Save Dialog**: Choose your save location directly on your computer.
+- **Styling Preserved**: All Markdown, Math, Tables, and Mermaid diagrams are perfectly rendered in the final output.
+
 ### 🔗 Deep Interconnectivity
 - **Interactive WikiLinks**: Seamlessly connect thoughts with `[[WikiLinks]]` with instant hover previews.
 - **Live Graph View**: Visualize your entire network or a focused "local graph" for the current note.
-- **Unlinked Mentions**: Discover hidden connections where you've mentioned a note title but Haven't linked it yet.
+- **Unlinked Mentions**: Discover hidden connections where you've mentioned a note title but haven't linked it yet.
 
 ---
 
