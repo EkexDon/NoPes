@@ -1,62 +1,94 @@
-# NoPes — The High-Performance Knowledge Base
+# NoPes — The High-Performance Second Brain
 
 ![NoPes Logo](src-tauri/icons/128x128@2x.png)
 
-**NoPes** is a professional-grade, local-first knowledge management tool designed for speed, privacy, and deep thought. Inspired by the best of Obsidian, but built from the ground up for a sleek, modern, and snappy user experience using **Tauri 2.0** and **React**.
+**NoPes** is a professional-grade, local-first knowledge management tool designed for speed, privacy, and visual thinking. Built with **Tauri 2.0** and **React**, it combines the power of structured markdown with the freedom of infinite-canvas whiteboarding and local AI.
 
-## 🚀 Key Features
+---
 
-- 📂 **Multi-Tab Interface**: Edit multiple notes simultaneously with a persistent tab bar, just like your favorite code editor.
-- 🔗 **Interactive WikiLinks**: Seamlessly connect your thoughts with `[[WikiLinks]]`. Enjoy instant hover previews and one-click navigation (or creation) of notes.
-- 🕸️ **Live Graph View**: Visualize the connections between your notes in a high-performance network graph. Toggle between a global vault view or a focused local graph for the current note.
-- ⚡ **Command Bar (Cmd+K)**: Instant access to all your files and frequent actions through a keyboard-driven command palette.
-- 🛠️ **Rich Text Editor**: A powerful TipTap-based editor supporting complex formatting, headlings, lists, code blocks, and images.
-- 🔒 **Local-First & Private**: Your data never leaves your computer. NoPes works directly with your local Markdown files.
-- 📄 **Word to Markdown**: Seamlessly import `.docx` files. Just drop them into your vault or onto the app, and they're automatically converted to Markdown.
+## 🔥 Pro Features
 
-##Web-Download
-https://nopes-web.vercel.app/
+### 🎨 Infinite Canvas (Whiteboard)
+Think visually. **NoPes Canvas** integrates [Excalidraw](https://excalidraw.com/) directly into your vault.
+- **Link to Notes**: Connect canvas elements to your markdown notes using `[[WikiLinks]]`. Clicking a linked shape instantly opens the relevant note.
+- **Auto-Save**: Seamless, debounced persistence to `.excalidraw` files within your vault.
+- **Visual Mapping**: Use it for mind maps, architecture diagrams, or freehand brainstorming.
 
-## 📦 Installation (MacOS)
+### 🧜‍♂️ Mermaid.js Diagrams
+Native rendering for professional diagrams right inside your markdown.
+- **Flowcharts, Sequence Diagrams, Gantt Charts**: Just use ```mermaid code blocks.
+- **Live Preview + Source Edit**: Toggle between the rendered SVG and the source code for instant adjustments.
 
-1. Download the latest **`.dmg`** file from the [Releases](https://github.com/EkexDon/NoPes/releases) page.
-2. Open the `.dmg` and drag the **NoPes** app into your **Applications** folder.
-3. Launch and start building your knowledge base!
+### 🤖 Local AI Assistant (Ollama)
+Your knowledge base, now with a brain. Powered by local **Ollama** integration.
+- **100% Offline**: No API keys, no tracking. All AI operations run on your local hardware.
+- **Context Aware**: Chat with your vault, summarize long notes, or brainstorm with an AI that knows your world.
 
-*(Windows `.exe` support coming soon via GitHub Actions)*
+### 📋 Slash Command Templates
+Stop staring at a blank page. Typed `/template` to choose from curated professional layouts:
+- **Daily Notes** & **Weekly Reviews**
+- **Meeting Minutes**
+- **Bug Reports** & **Code Reviews**
+
+### 🧊 Advanced Table Editor
+A professional table experience that doesn't suck.
+- **Custom Toolbar**: Floating controls for adding/deleting rows and columns.
+- **Header Toggling**: Quickly switch between standard and header cells.
+- **Excel-like Snappiness**: Built on the official TipTap table suite.
+
+### 🔗 Deep Interconnectivity
+- **Interactive WikiLinks**: Seamlessly connect thoughts with `[[WikiLinks]]` with instant hover previews.
+- **Live Graph View**: Visualize your entire network or a focused "local graph" for the current note.
+- **Unlinked Mentions**: Discover hidden connections where you've mentioned a note title but Haven't linked it yet.
+
+---
+
+## 🚀 Speed & Private by Design
+
+- **Local-First**: Your data never leaves your machine. NoPes works directly with `.md` files.
+- **Multi-Tab Interface**: Edit multiple notes simultaneously with a familiar, persistent tab bar.
+- **Command Bar (Cmd+K)**: Blazing fast navigation via a keyboard-driven command palette.
+- **Word to Markdown**: Drag-and-drop `.docx` files for instant, high-fidelity conversion.
+- **Rich Media**: Native inline support for PDFs (full scrollable iframe), Videos, and Images.
+
+---
+
+## 📦 Installation (macOS)
+
+1. Download the latest **`.dmg`** from the [Releases](https://github.com/EkexDon/NoPes/releases) page.
+2. Drag **NoPes** to your **Applications** folder.
+3. Open a folder to serve as your "Vault" and start thinking.
+
+*(Windows and Linux support coming soon)*
+
+---
+
+## 🏗️ Technology Stack
+
+- **Core**: [Tauri 2.0](https://tauri.app/) (Rust Backend)
+- **Frontend**: React 19 + TypeScript
+- **Visuals**: [Excalidraw](https://excalidraw.com/), [Mermaid.js](https://mermaid.js.org/)
+- **Editor**: [TipTap](https://tiptap.dev/) / ProseMirror
+- **AI Engine**: [Ollama](https://ollama.com/) (Local Llama 3.2)
+- **State**: [Zustand](https://github.com/pmndrs/zustand)
+- **Styling**: Vanilla CSS (Premium Dark Mode)
+
+---
 
 ## 🛠️ Development
 
-If you want to build NoPes from source or contribute:
-
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v18+)
-- [Rust](https://www.rust-lang.org/) (latest stable)
-- [Tauri CLI](https://tauri.app/v1/guides/getting-started/prerequisites)
-
-### Setup
 ```bash
+# Clone & Install
 git clone https://github.com/EkexDon/NoPes.git
-cd NoPes
 npm install
-```
 
-### Run Locally
-```bash
+# Run Dev Mode
 npm run tauri dev
-```
 
-### Build Production Version
-```bash
+# Build Production
 npm run tauri build
 ```
 
-## 🏗️ Technology Stack
-- **Framework**: [Tauri 2.0](https://tauri.app/) (Rust Backend)
-- **Frontend**: React 19 + TypeScript
-- **Editor**: [TipTap](https://tiptap.dev/) / ProseMirror
-- **State Management**: [Zustand](https://github.com/pmndrs/zustand)
-- **Styling**: Vanilla CSS (Modern Obsidian-inspired theme)
+---
 
-## 📄 License
-This project is for personal use and distribution by the author. See the codebase for licensing details.
+*Local-first. Privacy-first. Thought-first.*
