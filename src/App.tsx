@@ -10,12 +10,13 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   FileText, Share2, Search, Settings,
   PanelLeftClose, PanelLeftOpen, Plus, X,
-  Shield, Palette, Keyboard, CalendarDays, Bot
+  Shield, Palette, Keyboard, CalendarDays, Bot, Kanban
 } from 'lucide-react';
 import { useKBar } from 'kbar';
 import { Toaster } from 'react-hot-toast';
 import { VaultChat } from './components/VaultChat';
 import { CanvasView } from './components/CanvasView';
+import { KanbanView } from './components/KanbanView';
 
 /* ─── Error Boundary ─────────────────────────────────────── */
 class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
@@ -178,6 +179,9 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
         <button className={`icon-btn ${viewMode === 'journal' ? 'active' : ''}`} onClick={() => setViewMode('journal')} title="Journal (⌘J)">
           <CalendarDays size={18} />
         </button>
+        <button className={`icon-btn ${viewMode === 'kanban' ? 'active' : ''}`} onClick={() => setViewMode('kanban')} title="Kanban (⌘M)">
+          <Kanban size={18} />
+        </button>
         <button className="icon-btn" onClick={() => query.toggle()} title="Search (⌘K)">
           <Search size={18} />
         </button>
@@ -283,6 +287,7 @@ const App: React.FC = () => {
         case 'd': e.preventDefault(); setViewMode('canvas'); break;
         case 'g': e.preventDefault(); setViewMode('graph'); break;
         case 'j': e.preventDefault(); setViewMode('journal'); break;
+        case 'm': e.preventDefault(); setViewMode('kanban'); break;
         case 'n': e.preventDefault(); createFile('Untitled'); break;
         case 'w': e.preventDefault(); if (activeTab) closeTab(activeTab); break;
       }
@@ -341,6 +346,7 @@ const App: React.FC = () => {
                   { viewMode === 'graph' ? <GraphView /> :
                     viewMode === 'journal' ? <JournalView /> :
                     viewMode === 'canvas' ? <CanvasView /> :
+                    viewMode === 'kanban' ? <KanbanView /> :
                     (
                       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                         <TabBar />
@@ -372,6 +378,7 @@ const App: React.FC = () => {
                     { rightViewMode === 'graph' ? <GraphView /> :
                       rightViewMode === 'journal' ? <JournalView /> :
                       rightViewMode === 'canvas' ? <CanvasView /> :
+                      rightViewMode === 'kanban' ? <KanbanView /> :
                       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                         {rightActiveTab ? <NoteEditor tabId={rightActiveTab} /> : <EmptyState />}
                       </div>

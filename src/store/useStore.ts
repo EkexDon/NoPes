@@ -58,15 +58,15 @@ interface AppState {
   isSidebarOpen: boolean;
   isRefreshing: boolean;
   graphData: GraphData;
-  viewMode: 'editor' | 'graph' | 'journal' | 'canvas';
+  viewMode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban';
 
   // Split View Multi-Pane Support
   isSplitView: boolean;
   rightActiveTab: string | null;
-  rightViewMode: 'editor' | 'graph' | 'journal' | 'canvas';
+  rightViewMode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban';
   setSplitView: (isSplit: boolean) => void;
   setRightActiveTab: (path: string | null) => void;
-  setRightViewMode: (mode: 'editor' | 'graph' | 'journal' | 'canvas') => void;
+  setRightViewMode: (mode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban') => void;
   toggleSplitView: () => void;
 
   // Journal / Heatmap
@@ -96,7 +96,7 @@ interface AppState {
 
   loadGraphData: (override?: { path: string; text: string }) => Promise<void>;
   setSidebarOpen: (v: boolean) => void;
-  setViewMode: (mode: 'editor' | 'graph' | 'journal' | 'canvas') => void;
+  setViewMode: (mode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban') => void;
   
   createNodeFromGraph: () => Promise<void>;
   computeJournalStats: () => Promise<void>;

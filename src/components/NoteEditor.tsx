@@ -14,6 +14,7 @@ import 'tippy.js/dist/tippy.css';
 import { MathExtension } from '@aarkue/tiptap-math-extension';
 import 'katex/dist/katex.min.css';
 import { Node } from '@tiptap/core';
+import { FoldingExtension } from '../extensions/FoldingExtension';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Table } from '@tiptap/extension-table';
@@ -777,6 +778,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
         TableCell,
         MermaidExtension,
         MathExtension.configure({ evaluation: false }),
+        FoldingExtension,
         Underline,
         TextStyle,
         Color,
