@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import { CheckSquare, Square, Plus, Kanban } from 'lucide-react';
 
@@ -6,7 +6,6 @@ interface KanbanCard {
   id: string;
   text: string;
   checked: boolean;
-  rawLine: string;
 }
 
 interface KanbanColumn {
@@ -24,7 +23,7 @@ function parseKanban(markdown: string): KanbanColumn[] {
     const headingMatch = line.match(/^##\s+(.+)$/);
     if (headingMatch) {
       currentCol = {
-        id: crypto.randomUUID(),
+        id: `col-${headingMatch[1].trim()}`,
         title: headingMatch[1].trim(),
         cards: [],
       };
@@ -37,10 +36,9 @@ function parseKanban(markdown: string): KanbanColumn[] {
       if (uncheckedMatch || checkedMatch) {
         const text = (uncheckedMatch || checkedMatch)![1];
         currentCol.cards.push({
-          id: crypto.randomUUID(),
+          id: `card-${currentCol.id}-${currentCol.cards.length}`,
           text,
           checked: !!checkedMatch,
-          rawLine: line,
         });
       }
     }
@@ -49,15 +47,10 @@ function parseKanban(markdown: string): KanbanColumn[] {
   return columns;
 }
 
-function fullRebuildMarkdown(
-  original: string,
-  columns: KanbanColumn[]
-): string {
+function fullRebuildMarkdown(original: string, columns: KanbanColumn[]): string {
   const lines = original.split('\n');
   const output: string[] = [];
   let insideKanban = false;
-  let currentColTitle: string | null = null;
-  const writtenCols = new Set<string>();
 
   for (const line of lines) {
     const h2 = line.match(/^##\s+(.+)$/);
@@ -65,34 +58,22 @@ function fullRebuildMarkdown(
       const title = h2[1].trim();
       const matchedCol = columns.find((c) => c.title.trim() === title);
       if (matchedCol) {
-        // Flush current column cards
-        if (insideKanban && currentColTitle) {
-          // already written inline below
-        }
-        output.push(line); // column heading
+        output.push(line);
         insideKanban = true;
-        currentColTitle = title;
-        writtenCols.add(title);
-
-        // Write all cards for this column now
         for (const card of matchedCol.cards) {
           output.push(`- [${card.checked ? 'x' : ' '}] ${card.text}`);
         }
         continue;
       } else {
         insideKanban = false;
-        currentColTitle = null;
         output.push(line);
         continue;
       }
     }
-
-    // Skip original checkbox lines that belong to a kanban column (already written above)
+    // Skip old checkbox lines inside a kanban section (already rewritten above)
     if (insideKanban && (line.match(/^- \[ \] /) || line.match(/^- \[x\] /i))) {
       continue;
     }
-
-    // Skip blank lines after column headings when rebuilding (they'll be added back)
     output.push(line);
   }
 
@@ -105,11 +86,18 @@ export const KanbanView: React.FC = () => {
 
   const [localColumns, setLocalColumns] = useState<KanbanColumn[]>(() => parseKanban(content));
 
-  // Drag state
-  const [dragging, setDragging] = useState<{
-    colId: string;
-    cardId: string;
-  } | null>(null);
+  // Track the last tab so we re-parse when it changes, but NOT on every keystroke in editor
+  const prevTabRef = useRef<string | null>(activeTab ?? null);
+
+  useEffect(() => {
+    if (prevTabRef.current !== activeTab) {
+      // Tab changed — re-parse from disk content
+      prevTabRef.current = activeTab ?? null;
+      setLocalColumns(parseKanban(content));
+    }
+  }, [activeTab, content]);
+
+  const [dragging, setDragging] = useState<{ colId: string; cardId: string } | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
   const persist = useCallback(
@@ -120,10 +108,6 @@ export const KanbanView: React.FC = () => {
     },
     [activeTab, content, saveFile]
   );
-
-  const handleDragStart = (colId: string, cardId: string) => {
-    setDragging({ colId, cardId });
-  };
 
   const handleDrop = (targetColId: string) => {
     if (!dragging || dragging.colId === targetColId) {
@@ -172,7 +156,11 @@ export const KanbanView: React.FC = () => {
         ...col,
         cards: [
           ...col.cards,
-          { id: crypto.randomUUID(), text: text.trim(), checked: false, rawLine: `- [ ] ${text.trim()}` },
+          {
+            id: `card-${colId}-${Date.now()}`,
+            text: text.trim(),
+            checked: false,
+          },
         ],
       };
     });
@@ -196,7 +184,7 @@ export const KanbanView: React.FC = () => {
         <Kanban size={48} style={{ opacity: 0.15, marginBottom: 12 }} />
         <div className="empty-state-title">No Kanban columns found</div>
         <div className="empty-state-hint">
-          Add <code>##</code> headings and <code>- [ ]</code> tasks to this note to see them here
+          Add <code>##</code> headings and <code>- [ ]</code> tasks to this note
         </div>
         <pre className="kanban-example">{`## 📋 Backlog\n- [ ] My first task\n\n## 🔄 In Progress\n- [ ] Working on it\n\n## ✅ Done\n- [x] Completed task`}</pre>
       </div>
@@ -229,7 +217,7 @@ export const KanbanView: React.FC = () => {
                   key={card.id}
                   className={`kanban-card ${card.checked ? 'done' : ''} ${dragging?.cardId === card.id ? 'dragging' : ''}`}
                   draggable
-                  onDragStart={() => handleDragStart(col.id, card.id)}
+                  onDragStart={() => setDragging({ colId: col.id, cardId: card.id })}
                   onDragEnd={() => { setDragging(null); setDragOverCol(null); }}
                 >
                   <button
