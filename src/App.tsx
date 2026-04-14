@@ -15,6 +15,7 @@ import {
 import { useKBar } from 'kbar';
 import { Toaster } from 'react-hot-toast';
 import { VaultChat } from './components/VaultChat';
+import { CanvasView } from './components/CanvasView';
 
 /* ─── Error Boundary ─────────────────────────────────────── */
 class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
@@ -165,6 +166,9 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
         <button className={`icon-btn ${viewMode === 'editor' ? 'active' : ''}`} onClick={() => setViewMode('editor')} title="Editor">
           <FileText size={18} />
         </button>
+        <button className={`icon-btn ${viewMode === 'canvas' ? 'active' : ''}`} onClick={() => setViewMode('canvas')} title="Canvas (⌘D)">
+          <Palette size={18} />
+        </button>
         <button className={`icon-btn ${viewMode === 'graph' ? 'active' : ''}`} onClick={() => setViewMode('graph')} title="Graph (⌘G)">
           <Share2 size={18} />
         </button>
@@ -238,6 +242,7 @@ const App: React.FC = () => {
       switch (e.key) {
         case 'b': e.preventDefault(); setSidebarOpen(!isSidebarOpen); break;
         case 'e': e.preventDefault(); setViewMode('editor'); break;
+        case 'd': e.preventDefault(); setViewMode('canvas'); break;
         case 'g': e.preventDefault(); setViewMode('graph'); break;
         case 'j': e.preventDefault(); setViewMode('journal'); break;
         case 'n': e.preventDefault(); createFile('Untitled'); break;
@@ -295,6 +300,8 @@ const App: React.FC = () => {
               <GraphView />
             ) : viewMode === 'journal' ? (
               <JournalView />
+            ) : viewMode === 'canvas' ? (
+              <CanvasView />
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
                 <TabBar />

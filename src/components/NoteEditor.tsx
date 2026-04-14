@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { useEditor, EditorContent, ReactRenderer, Extension } from '@tiptap/react';
+import React, { useState, useRef, useEffect, useCallback, useId } from 'react';
+import { useEditor, EditorContent, ReactRenderer, Extension, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import LinkExtension from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -11,12 +11,21 @@ import Suggestion, { SuggestionOptions } from '@tiptap/suggestion';
 import { Markdown } from 'tiptap-markdown';
 import tippy, { Instance, delegate } from 'tippy.js';
 import 'tippy.js/dist/tippy.css';
+import { Node } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { Table } from '@tiptap/extension-table';
+import { TableRow } from '@tiptap/extension-table-row';
+import { TableCell } from '@tiptap/extension-table-cell';
+import { TableHeader } from '@tiptap/extension-table-header';
+import mermaid from 'mermaid';
 import {
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Link as LinkIcon,
   Image as ImageIcon, List, ListOrdered, Quote, Code, MoreHorizontal,
-  Minus, FileText, Underline as UnderlineIcon, Palette, Sparkles, Hash, Trash2
+  Minus, FileText, Underline as UnderlineIcon, Palette, Sparkles, Hash, Trash2,
+  Search, X as XIcon, ChevronUp, ChevronDown,
+  Grid3x3, LayoutTemplate, GitBranch,
+  RowsIcon, Columns, Trash, TableIcon, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { useStore, extractTags } from '../store/useStore';
 import { writeFile, exists, mkdir } from '@tauri-apps/plugin-fs';
@@ -25,6 +34,16 @@ import { AIService } from '../workers/AIService';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { convertFileSrc } from '@tauri-apps/api/core';
+
+// Init mermaid once
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'dark',
+  darkMode: true,
+  background: 'transparent' as any,
+  fontFamily: 'Inter, sans-serif',
+  fontSize: 14,
+});
 
 /* ─────────────────────────────────────────────
    Resolve a stored relative path (e.g. "assets/foo.mp4")
@@ -81,10 +100,94 @@ const NopesImage = Image.extend({
         img.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
       }
 
-      return { dom };
+      return { dom } as any;
     };
   }
 });
+
+/* ─────────────────────────────────────────────
+   Mermaid Node View
+───────────────────────────────────────────── */
+const MermaidView = (props: any) => {
+  const code = props.node.attrs.code || '';
+  const [svg, setSvg] = useState<string>('');
+  const [error, setError] = useState<string>('');
+  const [showCode, setShowCode] = useState(false);
+  const id = React.useId().replace(/:/g, '');
+
+  useEffect(() => {
+    let active = true;
+    const renderDiagram = async () => {
+      try {
+        if (!code.trim()) { setSvg(''); setError(''); return; }
+        const { svg: s } = await mermaid.render(`mermaid-${id}`, code);
+        if (active) { setSvg(s); setError(''); }
+      } catch (err: any) {
+        if (active) setError(err.message || 'Syntax error');
+      }
+    };
+    renderDiagram();
+    return () => { active = false; };
+  }, [code, id]);
+
+  const onCodeChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    props.updateAttributes({ code: e.target.value });
+  };
+
+  return (
+    <NodeViewWrapper className="mermaid-block">
+      <div className="mermaid-topbar" contentEditable={false}>
+        <div className="mermaid-label"><GitBranch size={12} /> Mermaid</div>
+        <button className="mermaid-toggle" onClick={() => setShowCode(!showCode)}>
+          {showCode ? 'Hide Source' : 'Edit Source'}
+        </button>
+      </div>
+      {showCode && (
+        <textarea 
+          style={{ width: '100%', minHeight: '150px', background: 'transparent', color: 'inherit', border: 'none', padding: '12px', fontFamily: 'var(--font-mono)', fontSize: '13px', resize: 'vertical', outline: 'none' }}
+          value={code}
+          onChange={onCodeChange}
+          onKeyDown={e => e.stopPropagation()}
+        />
+      )}
+      {!showCode && (
+        <div className="mermaid-render" dangerouslySetInnerHTML={{ __html: svg }} contentEditable={false} />
+      )}
+      {error && !showCode && <div className="mermaid-error" contentEditable={false}>{error}</div>}
+    </NodeViewWrapper>
+  );
+};
+
+const MermaidExtension = Node.create({
+  name: 'mermaidNode',
+  group: 'block',
+  atom: true,
+  addAttributes() {
+    return { code: { default: '' } };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: 'pre',
+        getAttrs: (node: string | HTMLElement) => {
+          const dom = node as HTMLElement;
+          const codeEl = dom.querySelector('code');
+          if (codeEl && codeEl.className.includes('language-mermaid')) {
+             return { code: codeEl.textContent };
+          }
+          return false;
+        }
+      }
+    ];
+  },
+  renderHTML({ HTMLAttributes }: any) {
+    return ['pre', {}, ['code', { class: 'language-mermaid' }, HTMLAttributes.code]];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(MermaidView);
+  }
+});
+
 
 /* ─────────────────────────────────────────────
    WikiLink suggestion list
@@ -128,44 +231,165 @@ const WikiLinkExtension = Extension.create({
 });
 
 /* ─────────────────────────────────────────────
+   Markdown Templates
+─────────────────────────────────────────── */
+const today = () => new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+const TEMPLATES: Record<string, string> = {
+  'Daily Note': `## 🗓️ ${today()}
+
+### Intentions
+- 
+
+### Notes
+
+
+### Gratitude
+1. 
+2. 
+3. `,
+  'Meeting Minutes': `## Meeting: [Title]
+**Date:** ${today()}  
+**Attendees:** 
+
+---
+
+### Agenda
+1. 
+
+### Discussion
+
+
+### Action Items
+| Task | Owner | Due |
+|------|-------|-----|
+|      |       |     |
+
+### Next Meeting
+`,
+  'Bug Report': `## 🐛 Bug: [Short Description]
+
+### Environment
+- **OS:** 
+- **Version:** 
+- **Browser/Runtime:** 
+
+### Steps to Reproduce
+1. 
+2. 
+3. 
+
+### Expected Behaviour
+
+
+### Actual Behaviour
+
+
+### Severity
+- [ ] Critical  - [ ] High  - [ ] Medium  - [ ] Low
+`,
+  'Code Review': `## Code Review: [PR Title]
+**PR:** #  
+**Author:**   
+**Reviewer:** ${today()}
+
+### Summary
+
+
+### Checklist
+- [ ] Logic is correct
+- [ ] Edge cases handled
+- [ ] Tests included
+- [ ] No unnecessary complexity
+- [ ] Naming is clear
+
+### Comments
+
+`,
+  'Weekly Review': `## Week of ${today()}
+
+### ✅ Wins
+- 
+
+### 🚧 Challenges
+- 
+
+### 📊 Metrics
+
+
+### 🔭 Next Week Focus
+1. 
+2. 
+3. 
+`,
+};
+
+/* ─────────────────────────────────────────────
    Slash Commands
 ───────────────────────────────────────────── */
 const COMMAND_ITEMS = [
-  { title: 'Heading 1', icon: <Heading1 size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 1 }).run() },
-  { title: 'Heading 2', icon: <Heading2 size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 2 }).run() },
-  { title: 'Heading 3', icon: <Heading3 size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run() },
-  { title: 'Bold', icon: <Bold size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setMark('bold').run() },
-  { title: 'Italic', icon: <Italic size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setMark('italic').run() },
-  { title: 'Bullet List', icon: <List size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleBulletList().run() },
-  { title: 'Numbered List', icon: <ListOrdered size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleOrderedList().run() },
-  { title: 'Quote', icon: <Quote size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleBlockquote().run() },
-  { title: 'Code Block', icon: <Code size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleCodeBlock().run() },
-  { title: 'Divider', icon: <Minus size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setHorizontalRule().run() },
+  // ─ Formatting
+  { title: 'Heading 1',     group: 'Format', icon: <Heading1 size={14} />,     command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 1 }).run() },
+  { title: 'Heading 2',     group: 'Format', icon: <Heading2 size={14} />,     command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 2 }).run() },
+  { title: 'Heading 3',     group: 'Format', icon: <Heading3 size={14} />,     command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run() },
+  { title: 'Bold',          group: 'Format', icon: <Bold size={14} />,         command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setMark('bold').run() },
+  { title: 'Italic',        group: 'Format', icon: <Italic size={14} />,       command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setMark('italic').run() },
+  { title: 'Bullet List',   group: 'Format', icon: <List size={14} />,         command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleBulletList().run() },
+  { title: 'Numbered List', group: 'Format', icon: <ListOrdered size={14} />,  command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleOrderedList().run() },
+  { title: 'Quote',         group: 'Format', icon: <Quote size={14} />,        command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleBlockquote().run() },
+  { title: 'Code Block',    group: 'Format', icon: <Code size={14} />,         command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleCodeBlock().run() },
+  { title: 'Divider',       group: 'Format', icon: <Minus size={14} />,        command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setHorizontalRule().run() },
+  // ─ Inserts
+  { title: 'Table',         group: 'Insert', icon: <Grid3x3 size={14} />,      command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
+  { title: 'Mermaid Diagram', group: 'Insert', icon: <GitBranch size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent('```mermaid\ngraph TD\n    A[Start] --> B{Decision}\n    B -->|Yes| C[Result 1]\n    B -->|No| D[Result 2]\n```\n').run() },
+  // ─ Templates
+  ...Object.entries(TEMPLATES).map(([title, content]) => ({
+    title,
+    group: 'Template',
+    icon: <LayoutTemplate size={14} />,
+    command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent(content + '\n').run(),
+  })),
 ];
 
 const SlashCommandList = React.forwardRef<any, any>((props, ref) => {
   const [sel, setSel] = useState(0);
   const pick = (i: number) => {
     const item = props.items[i];
-    if (item) props.command(item);
+    if (item && !item.isHeader) props.command(item);
   };
+  // Flat selectable indices (exclude headers)
+  const selectableItems = props.items.filter((it: any) => !it.isHeader);
   React.useImperativeHandle(ref, () => ({
     onKeyDown({ event }: { event: KeyboardEvent }) {
-      if (!props.items.length) return false;
-      if (event.key === 'ArrowUp')   { setSel(s => (s + props.items.length - 1) % props.items.length); return true; }
-      if (event.key === 'ArrowDown') { setSel(s => (s + 1) % props.items.length); return true; }
-      if (event.key === 'Enter')     { pick(sel); return true; }
+      if (!selectableItems.length) return false;
+      if (event.key === 'ArrowUp')   { setSel(s => (s + selectableItems.length - 1) % selectableItems.length); return true; }
+      if (event.key === 'ArrowDown') { setSel(s => (s + 1) % selectableItems.length); return true; }
+      if (event.key === 'Enter')     {
+        const item = selectableItems[sel];
+        if (item) props.command(item);
+        return true;
+      }
       return false;
     },
   }));
   if (!props.items.length) return null;
+  let selectIdx = -1;
   return (
     <div className="suggestion-list">
-      {props.items.map((item: any, i: number) => (
-        <button key={i} className={`suggestion-item ${i === sel ? 'is-selected' : ''}`} onClick={() => pick(i)} onMouseDown={e => e.preventDefault()}>
-          <span style={{ marginRight: 6, display: 'flex', alignItems: 'center' }}>{item.icon}</span> {item.title}
-        </button>
-      ))}
+      {props.items.map((item: any, i: number) => {
+        if (item.isHeader) return (
+          <div key={i} className="suggestion-group-header">{item.title}</div>
+        );
+        selectIdx++;
+        const si = selectIdx;
+        return (
+          <button key={i} className={`suggestion-item ${si === sel ? 'is-selected' : ''}`} onClick={() => props.command(item)} onMouseDown={e => e.preventDefault()}>
+            <span style={{ marginRight: 6, display: 'flex', alignItems: 'center' }}>{item.icon}</span>
+            <span>{item.title}</span>
+            {item.group === 'Template' && <span className="suggestion-badge">template</span>}
+          </button>
+        );
+      })}
     </div>
   );
 });
@@ -178,9 +402,9 @@ const SlashCommandExtension = Extension.create({
   },
 });
 
-/* ─────────────────────────────────────────────
+/* \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
    WikiLink Decorator (Exact click & Hover)
-───────────────────────────────────────────── */
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 const wikiLinkPluginKey = new PluginKey('wikiLinkDecorator');
 
 const WikiLinkDecorator = Extension.create({
@@ -240,9 +464,9 @@ const WikiLinkDecorator = Extension.create({
   },
 });
 
-/* ─────────────────────────────────────────────
+/* \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
    Toolbar Button Helper
-───────────────────────────────────────────── */
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 const TBtn: React.FC<{
   active?: boolean; title: string; onClick: () => void; children: React.ReactNode;
 }> = ({ active, title, onClick, children }) => (
@@ -258,9 +482,33 @@ const TBtn: React.FC<{
 
 const Divider = () => <div className="toolbar-divider" />;
 
-/* ─────────────────────────────────────────────
+/* \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   Table Floating Toolbar
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+const TableToolbar: React.FC<{ editor: ReturnType<typeof useEditor> }> = ({ editor }) => {
+  if (!editor || !editor.isActive('table')) return null;
+  const c = editor.chain().focus();
+  return (
+    <div className="table-toolbar">
+      <span className="table-toolbar-label"><TableIcon size={12}/> Table</span>
+      <div className="table-toolbar-divider" />
+      <button className="table-tb-btn" title="Add row above" onMouseDown={e => { e.preventDefault(); c.addRowBefore().run(); }}><ChevronUp size={13}/><RowsIcon size={12}/></button>
+      <button className="table-tb-btn" title="Add row below" onMouseDown={e => { e.preventDefault(); c.addRowAfter().run(); }}><ChevronDown size={13}/><RowsIcon size={12}/></button>
+      <button className="table-tb-btn" title="Delete row" onMouseDown={e => { e.preventDefault(); c.deleteRow().run(); }}><Trash size={12}/><RowsIcon size={12}/></button>
+      <div className="table-toolbar-divider" />
+      <button className="table-tb-btn" title="Add column left" onMouseDown={e => { e.preventDefault(); c.addColumnBefore().run(); }}><ChevronLeft size={13}/><Columns size={12}/></button>
+      <button className="table-tb-btn" title="Add column right" onMouseDown={e => { e.preventDefault(); c.addColumnAfter().run(); }}><ChevronRight size={13}/><Columns size={12}/></button>
+      <button className="table-tb-btn" title="Delete column" onMouseDown={e => { e.preventDefault(); c.deleteColumn().run(); }}><Trash size={12}/><Columns size={12}/></button>
+      <div className="table-toolbar-divider" />
+      <button className="table-tb-btn" title="Toggle header row" onMouseDown={e => { e.preventDefault(); c.toggleHeaderRow().run(); }}>H</button>
+      <button className="table-tb-btn table-tb-delete" title="Delete table" onMouseDown={e => { e.preventDefault(); c.deleteTable().run(); }}><Trash2 size={13}/></button>
+    </div>
+  );
+};
+
+/* \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
    Formatting Toolbar
-───────────────────────────────────────────── */
+\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
 const Toolbar: React.FC<{
   editor: ReturnType<typeof useEditor>;
   onInsertImage: () => void;
@@ -314,9 +562,12 @@ const Toolbar: React.FC<{
       <Divider/>
       <TBtn active={editor.isActive('link')} title="Insert link" onClick={onInsertLink}><LinkIcon size={15}/></TBtn>
       <TBtn title="Insert image" onClick={onInsertImage}><ImageIcon size={15}/></TBtn>
+      <Divider/>
+      <TBtn active={editor.isActive('table')} title="Insert table (3×3)" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}><Grid3x3 size={15}/></TBtn>
     </div>
   );
 };
+
 
 /* ─────────────────────────────────────────────
    Link Modal
@@ -346,6 +597,62 @@ const LinkModal: React.FC<{
 };
 
 /* ─────────────────────────────────────────────
+   In-Note Search Bar Component
+───────────────────────────────────────────── */
+const SearchBar: React.FC<{
+  query: string;
+  onQueryChange: (q: string) => void;
+  matchIndex: number;
+  matchCount: number;
+  onPrev: () => void;
+  onNext: () => void;
+  onClose: () => void;
+}> = ({ query, onQueryChange, matchIndex, matchCount, onPrev, onNext, onClose }) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { onClose(); return; }
+    if (e.key === 'Enter') { e.shiftKey ? onPrev() : onNext(); }
+  };
+
+  return (
+    <div className="note-search-bar" onMouseDown={e => e.stopPropagation()}>
+      <div className="note-search-inner">
+        <Search size={14} className="note-search-icon" />
+        <input
+          ref={inputRef}
+          className="note-search-input"
+          placeholder="Find in note…"
+          value={query}
+          onChange={e => onQueryChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+        />
+        {query && (
+          <span className="note-search-count">
+            {matchCount === 0 ? 'No results' : `${matchIndex + 1} / ${matchCount}`}
+          </span>
+        )}
+        <button className="note-search-nav-btn" title="Previous (⇧Enter)" onClick={onPrev} disabled={matchCount === 0}>
+          <ChevronUp size={14} />
+        </button>
+        <button className="note-search-nav-btn" title="Next (Enter)" onClick={onNext} disabled={matchCount === 0}>
+          <ChevronDown size={14} />
+        </button>
+        <button className="note-search-close-btn" title="Close (Esc)" onClick={onClose}>
+          <XIcon size={14} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/* ─────────────────────────────────────────────
    Main NoteEditor
 ───────────────────────────────────────────── */
 export const NoteEditor: React.FC = () => {
@@ -360,7 +667,14 @@ export const NoteEditor: React.FC = () => {
   const [aiStatus, setAiStatus] = useState('idle');
   const allFilesRef = useRef(allFiles);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
+
+  // ── In-note search state ──────────────────────────────────────────────
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0);
+  const [searchMatchCount, setSearchMatchCount] = useState(0);
+  const searchMatchesRef = useRef<{ from: number; to: number }[]>([]);
+
   const storeActionsRef = useRef({ openFile, createFile });
   useEffect(() => { storeActionsRef.current = { openFile, createFile }; }, [openFile, createFile]);
 
@@ -452,6 +766,11 @@ export const NoteEditor: React.FC = () => {
     {
       extensions: [
         StarterKit,
+        Table.configure({ resizable: true }),
+        TableRow,
+        TableHeader,
+        TableCell,
+        MermaidExtension,
         Underline,
         TextStyle,
         Color,
@@ -665,6 +984,129 @@ useEffect(() => {
   };
 }, [ctxMenu]);
 
+  // ── Search: compute & highlight matches ─────────────────────────────
+  const applySearchHighlights = useCallback((q: string, currentIndex: number) => {
+    if (!editor) return;
+    const { tr, doc } = editor.state;
+    // Clear existing search marks first via a fresh transaction
+    const cleanTr = editor.state.tr;
+    // We use CSS decoration approach via a stored array — no mark needed
+    // Instead we scroll the current match into view via DOM
+    const editorEl = editor.view.dom as HTMLElement;
+    // Remove previous highlights
+    editorEl.querySelectorAll('.search-highlight').forEach(el => {
+      const text = document.createTextNode(el.textContent || '');
+      el.replaceWith(text);
+    });
+    editorEl.querySelectorAll('.search-highlight-current').forEach(el => {
+      const text = document.createTextNode(el.textContent || '');
+      el.replaceWith(text);
+    });
+    // Normalize DOM after replacements
+    editorEl.normalize();
+
+    if (!q || q.trim() === '') {
+      setSearchMatchCount(0);
+      setSearchMatchIndex(0);
+      searchMatchesRef.current = [];
+      return;
+    }
+
+    const lowerQ = q.toLowerCase();
+    // Collect all text nodes in the editor
+    const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT, null);
+    const textNodes: Text[] = [];
+    let node: Node | null;
+    while ((node = walker.nextNode())) textNodes.push(node as Text);
+
+    let matches: HTMLElement[] = [];
+    textNodes.forEach(textNode => {
+      const text = textNode.textContent || '';
+      const lower = text.toLowerCase();
+      let idx = 0;
+      const parts: { start: number; end: number }[] = [];
+      while ((idx = lower.indexOf(lowerQ, idx)) !== -1) {
+        parts.push({ start: idx, end: idx + q.length });
+        idx += q.length;
+      }
+      if (!parts.length) return;
+
+      const frag = document.createDocumentFragment();
+      let cursor = 0;
+      parts.forEach(({ start, end }) => {
+        if (cursor < start) frag.appendChild(document.createTextNode(text.slice(cursor, start)));
+        const mark = document.createElement('mark');
+        mark.className = 'search-highlight';
+        mark.textContent = text.slice(start, end);
+        frag.appendChild(mark);
+        matches.push(mark);
+        cursor = end;
+      });
+      if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)));
+      textNode.replaceWith(frag);
+    });
+
+    setSearchMatchCount(matches.length);
+    const safeIndex = matches.length > 0 ? Math.min(currentIndex, matches.length - 1) : 0;
+    setSearchMatchIndex(safeIndex);
+
+    if (matches.length > 0) {
+      matches.forEach((m, i) => {
+        m.className = i === safeIndex ? 'search-highlight search-highlight-current' : 'search-highlight';
+      });
+      matches[safeIndex]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [editor]);
+
+  useEffect(() => {
+    if (!showSearch) {
+      // Clear highlights when panel is closed
+      if (editor) {
+        const editorEl = editor.view.dom as HTMLElement;
+        editorEl.querySelectorAll('.search-highlight, .search-highlight-current').forEach(el => {
+          const text = document.createTextNode(el.textContent || '');
+          el.replaceWith(text);
+        });
+        editorEl.normalize();
+      }
+      setSearchQuery('');
+      setSearchMatchCount(0);
+      setSearchMatchIndex(0);
+    }
+  }, [showSearch, editor]);
+
+  useEffect(() => {
+    applySearchHighlights(searchQuery, 0);
+    setSearchMatchIndex(0);
+  }, [searchQuery]);
+
+  const navigateSearch = useCallback((direction: 'next' | 'prev') => {
+    if (!editor) return;
+    const editorEl = editor.view.dom as HTMLElement;
+    const marks = Array.from(editorEl.querySelectorAll<HTMLElement>('.search-highlight'));
+    if (!marks.length) return;
+    const newIndex = direction === 'next'
+      ? (searchMatchIndex + 1) % marks.length
+      : (searchMatchIndex - 1 + marks.length) % marks.length;
+    marks.forEach((m, i) => {
+      m.className = i === newIndex ? 'search-highlight search-highlight-current' : 'search-highlight';
+    });
+    marks[newIndex]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setSearchMatchIndex(newIndex);
+  }, [editor, searchMatchIndex]);
+
+  // ── Cmd+F to open search ──────────────────────────────────────────────
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f' && activeTab) {
+        e.preventDefault();
+        setShowSearch(true);
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [activeTab]);
+
   useEffect(() => {
     if (!editor) return;
     const instance = delegate(document.body, {
@@ -731,9 +1173,28 @@ useEffect(() => {
         </div>
         <div className="editor-topbar-right">
           <span className={`save-status ${saving ? 'saving' : ''}`}>{saving ? 'Saving…' : 'Saved'}</span>
+          <button
+            className={`icon-btn sm ${showSearch ? 'is-active' : ''}`}
+            title="Find in note (⌘F)"
+            onClick={() => setShowSearch(v => !v)}
+          >
+            <Search size={15}/>
+          </button>
           <button className="icon-btn sm" title="More options"><MoreHorizontal size={16}/></button>
         </div>
       </div>
+
+      {showSearch && (
+        <SearchBar
+          query={searchQuery}
+          onQueryChange={q => setSearchQuery(q)}
+          matchIndex={searchMatchIndex}
+          matchCount={searchMatchCount}
+          onPrev={() => navigateSearch('prev')}
+          onNext={() => navigateSearch('next')}
+          onClose={() => setShowSearch(false)}
+        />
+      )}
 
       <Toolbar
         editor={editor}
@@ -744,6 +1205,7 @@ useEffect(() => {
           setShowLinkModal(true);
         }}
       />
+      <TableToolbar editor={editor} />
 
       <div 
         className="editor-scroll"

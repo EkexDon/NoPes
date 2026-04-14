@@ -58,7 +58,7 @@ interface AppState {
   isSidebarOpen: boolean;
   isRefreshing: boolean;
   graphData: GraphData;
-  viewMode: 'editor' | 'graph' | 'journal';
+  viewMode: 'editor' | 'graph' | 'journal' | 'canvas';
 
   // Journal / Heatmap
   journalStats: Record<string, number>; // 'YYYY-MM-DD' -> word count
@@ -87,7 +87,7 @@ interface AppState {
 
   loadGraphData: (override?: { path: string; text: string }) => Promise<void>;
   setSidebarOpen: (v: boolean) => void;
-  setViewMode: (mode: 'editor' | 'graph' | 'journal') => void;
+  setViewMode: (mode: 'editor' | 'graph' | 'journal' | 'canvas') => void;
   
   createNodeFromGraph: () => Promise<void>;
   computeJournalStats: () => Promise<void>;

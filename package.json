@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.0",
     "@huggingface/transformers": "^4.0.1",
     "@milkdown/core": "^7.20.0",
     "@milkdown/ctx": "^7.20.0",
@@ -30,6 +31,10 @@
     "@tiptap/extension-image": "^3.22.1",
     "@tiptap/extension-link": "^3.21.0",
     "@tiptap/extension-placeholder": "^3.21.0",
+    "@tiptap/extension-table": "^3.22.3",
+    "@tiptap/extension-table-cell": "^3.22.3",
+    "@tiptap/extension-table-header": "^3.22.3",
+    "@tiptap/extension-table-row": "^3.22.3",
     "@tiptap/extension-text-style": "^3.22.1",
     "@tiptap/extension-underline": "^3.22.1",
     "@tiptap/pm": "^3.21.0",
@@ -41,6 +46,7 @@
     "kbar": "^0.1.0-beta.48",
     "lucide-react": "^1.7.0",
     "mammoth": "^1.12.0",
+    "mermaid": "^11.14.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-force-graph-2d": "^1.29.1",

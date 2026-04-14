@@ -30,8 +30,13 @@ export default defineConfig(async () => ({
     format: 'es',
   },
 
+  define: {
+    'process.env.IS_PREACT': '"false"',
+  },
+
   optimizeDeps: {
     exclude: ['@huggingface/transformers'],
+    include: ['@excalidraw/excalidraw'],
   },
 }));
 

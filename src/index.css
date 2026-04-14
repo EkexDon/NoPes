@@ -334,12 +334,117 @@ a { color: var(--accent); text-decoration: none; }
   gap: 8px;
 }
 
+.icon-btn.sm.is-active {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
 .save-status {
   font-size: 0.75rem;
   color: var(--tx-3);
   transition: color 0.3s;
 }
 .save-status.saving { color: var(--accent); }
+
+/* ======================================================
+   IN-NOTE SEARCH BAR
+   ====================================================== */
+.note-search-bar {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  padding: 6px 16px;
+  animation: search-slide-in 0.15s ease;
+}
+
+@keyframes search-slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.note-search-inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 440px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.note-search-inner:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.note-search-icon {
+  color: var(--tx-3);
+  flex-shrink: 0;
+}
+
+.note-search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--tx-1);
+  font-size: 0.875rem;
+  font-family: var(--font);
+  min-width: 0;
+}
+
+.note-search-input::placeholder { color: var(--tx-3); }
+
+.note-search-count {
+  font-size: 0.72rem;
+  color: var(--tx-3);
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+
+.note-search-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--tx-3);
+  transition: color 0.12s, background 0.12s;
+  flex-shrink: 0;
+}
+.note-search-nav-btn:hover:not(:disabled) { color: var(--tx-1); background: var(--bg-3); }
+.note-search-nav-btn:disabled { opacity: 0.3; cursor: default; }
+
+.note-search-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--tx-3);
+  flex-shrink: 0;
+  transition: color 0.12s, background 0.12s;
+}
+.note-search-close-btn:hover { color: var(--tx-1); background: var(--bg-3); }
+
+/* ── Search highlight marks ───────────────────────── */
+mark.search-highlight {
+  background: rgba(255, 200, 60, 0.30);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+mark.search-highlight.search-highlight-current {
+  background: rgba(255, 160, 30, 0.70);
+  color: #fff;
+  outline: 1px solid rgba(255, 160, 30, 0.9);
+}
 
 .editor-scroll {
   flex: 1;
@@ -1766,3 +1871,211 @@ button:disabled {
 .media-ctx-delete { color: #f87171; }
 .media-ctx-delete:hover { background: rgba(248,113,113,0.12); color: #fca5a5; }
 
+
+/* ─────────────────────────────────────────────
+   Mermaid Diagrams
+───────────────────────────────────────────── */
+.mermaid-block {
+  margin: 1.5rem 0;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.mermaid-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  user-select: none;
+}
+
+.mermaid-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mermaid-toggle {
+  background: none;
+  border: none;
+  color: var(--accent-light);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.mermaid-toggle:hover {
+  background: var(--bg-primary);
+  color: #fff;
+}
+
+.mermaid-source {
+  padding: 12px;
+  margin: 0 !important;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 0 !important;
+}
+
+.mermaid-render {
+  padding: 24px;
+  display: flex;
+  justify-content: center;
+  min-height: 100px;
+  background: var(--bg-primary);
+}
+
+.mermaid-render svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-error {
+  padding: 16px;
+  color: var(--red);
+  background: rgba(248, 113, 113, 0.1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+/* ─────────────────────────────────────────────
+   Table Editor
+───────────────────────────────────────────── */
+.editor-body table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 1.5rem 0;
+  overflow: hidden;
+  border-radius: 6px;
+  border-style: hidden; /* Hide outer borders for rounded corners effect */
+  box-shadow: 0 0 0 1px var(--border-color);
+}
+
+.editor-body td,
+.editor-body th {
+  min-width: 1rem;
+  border: 1px solid var(--border-color);
+  padding: 8px 12px;
+  vertical-align: top;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.editor-body th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+  text-align: left;
+}
+
+.editor-body .selectedCell:after {
+  z-index: 2;
+  position: absolute;
+  content: "";
+  left: 0; right: 0; top: 0; bottom: 0;
+  background: rgba(255, 255, 255, 0.08); /* Highlight selection */
+  pointer-events: none;
+}
+
+.editor-body .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: -2px;
+  width: 4px;
+  background-color: var(--accent-light);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.table-toolbar {
+  position: fixed;
+  z-index: 100;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  padding: 4px;
+  display: flex;
+  gap: 2px;
+  transform: translate(-50%, calc(-100% - 10px));
+  /* In real tip-tap you position this dynamically via getBoundingClientRect() of selected node.
+     For this demo we position it sticky top as fallback if JS positioning fails. */
+  top: 60px;
+  left: 50%;
+  align-items: center;
+}
+
+.table-toolbar-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  pointer-events: none;
+}
+
+.table-toolbar-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-color);
+  margin: 0 4px;
+}
+
+.table-tb-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+}
+
+.table-tb-btn:hover {
+  background: var(--bg-secondary);
+  color: #fff;
+}
+
+.table-tb-delete:hover {
+  background: var(--red);
+  color: white;
+}
+
+.suggestion-badge {
+  font-size: 9px;
+  background: rgba(255,255,255,0.1);
+  padding: 2px 6px;
+  border-radius: 12px;
+  margin-left: auto;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.suggestion-group-header {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  letter-spacing: 0.5px;
+  padding: 4px 12px;
+  margin-top: 6px;
+  border-top: 1px solid var(--border-color);
+}
+.suggestion-group-header:first-child {
+  border-top: none;
+  margin-top: 0;
+}
