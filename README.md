@@ -1,5 +1,7 @@
 # NoPes — The High-Performance Second Brain
 
+![NoPes Overview](assets/banner.jpg)
+
 ![NoPes Logo](src-tauri/icons/128x128@2x.png)
 
 **NoPes** is a professional-grade, local-first knowledge management tool designed for speed, privacy, and visual thinking. Built with **Tauri 2.0** and **React**, it combines the power of structured markdown with the freedom of infinite-canvas whiteboarding and local AI.
