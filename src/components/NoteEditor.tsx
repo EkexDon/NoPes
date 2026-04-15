@@ -659,6 +659,32 @@ const SearchBar: React.FC<{
 /* ─────────────────────────────────────────────
    Main NoteEditor
 ───────────────────────────────────────────── */
+/**
+ * Convert raw markdown math ($$...$$  and  $...$) into the HTML that
+ * @aarkue/tiptap-math-extension can parse when tiptap-markdown loads the file.
+ * Block math  → <span data-type="inlineMath" data-latex="..." data-display="yes"></span>
+ * Inline math → <span data-type="inlineMath" data-latex="..."></span>
+ * We escape HTML entities in the latex to prevent XSS / mangling.
+ */
+function preprocessMath(md: string): string {
+  const escAttr = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Block math: $$...$$  (greedy is fine – math shouldn't span paragraphs)
+  let out = md.replace(/\$\$([\s\S]+?)\$\$/g, (_m, latex) => {
+    const safe = escAttr(latex.trim());
+    return `<span data-type="inlineMath" data-latex="${safe}" data-display="yes"></span>`;
+  });
+
+  // Inline math: $...$ — require non-space at edges to avoid false positives (e.g. US $5)
+  out = out.replace(/\$([^\s$][^$]*[^\s$]|[^\s$])\$/g, (_m, latex) => {
+    const safe = escAttr(latex.trim());
+    return `<span data-type="inlineMath" data-latex="${safe}"></span>`;
+  });
+
+  return out;
+}
+
 export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const { 
     allFiles, activeTab, tabContents, saveFile, openFile, createFile, graphData,
@@ -785,7 +811,11 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
         NopesImage.configure({ allowBase64: true }),
         LinkExtension.configure({ openOnClick: false }),
         Placeholder.configure({ placeholder: 'Start writing…' }),
-        Markdown.configure({ transformCopiedText: false, transformPastedText: false }),
+        Markdown.configure({
+          html: true,
+          transformCopiedText: false,
+          transformPastedText: false,
+        }),
         WikiLinkDecorator,
         WikiLinkExtension.configure({
           suggestion: {
@@ -888,7 +918,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
     if (!editor) return;
     const curr = (editor.storage as any).markdown?.getMarkdown?.() ?? '';
     if (curr !== content) {
-      editor.commands.setContent(content, { emitUpdate: false } as any);
+      editor.commands.setContent(preprocessMath(content), { emitUpdate: false } as any);
     }
   }, [currentTab, content]);
 
