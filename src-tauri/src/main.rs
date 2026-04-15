@@ -104,21 +104,6 @@ fn main() {
     // Ensure panic logger is active
     init_panic_logger();
     println!("[Nopes] App started – devtools will be forced open");
-    // Spawn a background thread that logs after 5 minutes of inactivity
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_secs(300)); // 5 minutes
-        eprintln!("[Nopes] Inactivity timeout reached – logging to crash.log");
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("crash.log")
-            .and_then(|mut f| {
-                use std::io::Write;
-                writeln!(f, "[TIMEOUT] App idle for 5 minutes at {:?}", std::time::SystemTime::now())
-            });
-    });
-    // Start Ollama in background if available
-    start_ollama();
     // Start Ollama in background if available
     start_ollama();
     nopes_lib::run();
