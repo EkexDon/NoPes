@@ -99,6 +99,8 @@ export const KanbanView: React.FC = () => {
 
   const [dragging, setDragging] = useState<{ colId: string; cardId: string } | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  const [activeInsertCol, setActiveInsertCol] = useState<string | null>(null);
+  const [newCardText, setNewCardText] = useState('');
 
   const persist = useCallback(
     (cols: KanbanColumn[]) => {
@@ -147,9 +149,11 @@ export const KanbanView: React.FC = () => {
     persist(newCols);
   };
 
-  const addCard = (colId: string) => {
-    const text = prompt('New task:');
-    if (!text?.trim()) return;
+  const submitNewCard = (colId: string) => {
+    if (!newCardText.trim()) {
+      setActiveInsertCol(null);
+      return;
+    }
     const newCols = localColumns.map((col) => {
       if (col.id !== colId) return col;
       return {
@@ -158,7 +162,7 @@ export const KanbanView: React.FC = () => {
           ...col.cards,
           {
             id: `card-${colId}-${Date.now()}`,
-            text: text.trim(),
+            text: newCardText.trim(),
             checked: false,
           },
         ],
@@ -166,6 +170,8 @@ export const KanbanView: React.FC = () => {
     });
     setLocalColumns(newCols);
     persist(newCols);
+    setNewCardText('');
+    setActiveInsertCol(null);
   };
 
   if (!activeTab) {
@@ -233,9 +239,36 @@ export const KanbanView: React.FC = () => {
                   <span className="kanban-card-text">{card.text}</span>
                 </div>
               ))}
-              <button className="kanban-add-card" onClick={() => addCard(col.id)}>
-                <Plus size={12} /> Add card
-              </button>
+              
+              {activeInsertCol === col.id ? (
+                <div className="kanban-card-input-wrapper">
+                  <input
+                    autoFocus
+                    className="kanban-card-input"
+                    placeholder="Enter task..."
+                    value={newCardText}
+                    onChange={(e) => setNewCardText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submitNewCard(col.id);
+                      if (e.key === 'Escape') {
+                        setActiveInsertCol(null);
+                        setNewCardText('');
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!newCardText.trim()) setActiveInsertCol(null);
+                    }}
+                  />
+                  <div className="kanban-input-actions">
+                    <button className="kanban-btn-add" onClick={() => submitNewCard(col.id)}>Add</button>
+                    <button className="kanban-btn-cancel" onClick={() => { setActiveInsertCol(null); setNewCardText(''); }}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button className="kanban-add-card" onClick={() => { setActiveInsertCol(col.id); setNewCardText(''); }}>
+                  <Plus size={12} /> Add card
+                </button>
+              )}
             </div>
           </div>
         ))}

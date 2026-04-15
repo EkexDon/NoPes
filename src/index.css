@@ -2349,3 +2349,66 @@ button:disabled {
   margin-top: 8px;
   line-height: 1.8;
 }
+
+/* ─── KANBAN INLINE CARD INPUT ─────────────────────────────── */
+.kanban-card-input-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.kanban-card-input {
+  width: 100%;
+  background: var(--bg-0);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  color: var(--tx-1);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(124, 109, 255, 0.15);
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.kanban-card-input::placeholder {
+  color: var(--tx-3);
+}
+
+.kanban-input-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.kanban-btn-add {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.kanban-btn-add:hover {
+  opacity: 0.85;
+}
+
+.kanban-btn-cancel {
+  background: transparent;
+  color: var(--tx-3);
+  border: 1px solid var(--bd-2);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.kanban-btn-cancel:hover {
+  color: var(--tx-1);
+  border-color: var(--tx-3);
+}
