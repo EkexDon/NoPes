@@ -88,11 +88,19 @@ export const KanbanView: React.FC = () => {
 
   // Track the last tab so we re-parse when it changes, but NOT on every keystroke in editor
   const prevTabRef = useRef<string | null>(activeTab ?? null);
+  const lastSavedMdRef = useRef<string>(content);
 
   useEffect(() => {
     if (prevTabRef.current !== activeTab) {
-      // Tab changed — re-parse from disk content
+      // Different file — always re-parse fresh
       prevTabRef.current = activeTab ?? null;
+      lastSavedMdRef.current = content;
+      setLocalColumns(parseKanban(content));
+      return;
+    }
+    // Same tab — only re-parse if content was changed EXTERNALLY (i.e. by the Editor, not by us)
+    if (content !== lastSavedMdRef.current) {
+      lastSavedMdRef.current = content;
       setLocalColumns(parseKanban(content));
     }
   }, [activeTab, content]);
@@ -106,6 +114,7 @@ export const KanbanView: React.FC = () => {
     (cols: KanbanColumn[]) => {
       if (!activeTab) return;
       const newMd = fullRebuildMarkdown(content, cols);
+      lastSavedMdRef.current = newMd; // mark as our own write so sync doesn't re-parse
       saveFile(activeTab, newMd);
     },
     [activeTab, content, saveFile]
