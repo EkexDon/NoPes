@@ -19,6 +19,9 @@ function parseKanban(markdown: string): KanbanColumn[] {
   const columns: KanbanColumn[] = [];
   let currentCol: KanbanColumn | null = null;
 
+  // Matches: "- [ ] text", "* [ ] text", "[ ] text", and checked variants
+  const checkboxRe = /^(?:[-*]\s+)?\[( |x)\]\s+(.+)$/i;
+
   for (const line of lines) {
     const headingMatch = line.match(/^##\s+(.+)$/);
     if (headingMatch) {
@@ -30,17 +33,19 @@ function parseKanban(markdown: string): KanbanColumn[] {
       columns.push(currentCol);
       continue;
     }
-    if (currentCol) {
-      const uncheckedMatch = line.match(/^- \[ \] (.+)$/);
-      const checkedMatch = line.match(/^- \[x\] (.+)$/i);
-      if (uncheckedMatch || checkedMatch) {
-        const text = (uncheckedMatch || checkedMatch)![1];
-        currentCol.cards.push({
-          id: `card-${currentCol.id}-${currentCol.cards.length}`,
-          text,
-          checked: !!checkedMatch,
-        });
+
+    const cbMatch = line.match(checkboxRe);
+    if (cbMatch) {
+      // If no column yet, auto-create a default one
+      if (!currentCol) {
+        currentCol = { id: 'col-default', title: '📋 Tasks', cards: [] };
+        columns.unshift(currentCol); // put at front
       }
+      currentCol.cards.push({
+        id: `card-${currentCol.id}-${currentCol.cards.length}`,
+        text: cbMatch[2].trim(),
+        checked: cbMatch[1].toLowerCase() === 'x',
+      });
     }
   }
 
