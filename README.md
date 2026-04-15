@@ -8,6 +8,20 @@
 
 ## 🔥 Pro Features
 
+### 🗂️ Kanban Board
+Turn any markdown note into a visual task board.
+- **Markdown-Backed**: Uses `##` headings as columns and `- [ ]` checklists as cards — no proprietary format.
+- **Drag & Drop**: Move cards between columns with full automatic persistence back to the `.md` file.
+- **Inline Card Creation**: Click "Add card" to type directly in-column — no popups, no dialogs.
+- **Two-Way Sync**: Cards added in the Editor appear instantly in Kanban; cards moved in Kanban update the file.
+- **Auto Column**: Loose `- [ ]` items without a `##` header are collected into a default "📋 Tasks" column.
+
+### 📊 Outliner Folding
+Focus on what matters in long documents.
+- **Section Collapse**: Click the `▶` arrow next to any heading (`H1`–`H3`) to fold the entire section below it.
+- **Session-Only**: Folding state is per-session, keeping your `.md` files clean and portable.
+- **Performance**: Built as a ProseMirror decoration plugin — zero re-renders during fold/unfold.
+
 ### 🎨 Infinite Canvas (Whiteboard)
 Think visually. **NoPes Canvas** integrates [Excalidraw](https://excalidraw.com/) directly into your vault.
 - **Link to Notes**: Connect canvas elements to your markdown notes using `[[WikiLinks]]`. Clicking a linked shape instantly opens the relevant note.
@@ -16,7 +30,7 @@ Think visually. **NoPes Canvas** integrates [Excalidraw](https://excalidraw.com/
 
 ### 🧜‍♂️ Mermaid.js Diagrams
 Native rendering for professional diagrams right inside your markdown.
-- **Flowcharts, Sequence Diagrams, Gantt Charts**: Just use ```mermaid code blocks.
+- **Flowcharts, Sequence Diagrams, Gantt Charts**: Just use ` ```mermaid ` code blocks.
 - **Live Preview + Source Edit**: Toggle between the rendered SVG and the source code for instant adjustments.
 
 ### 🤖 Local AI Assistant (Ollama)
@@ -25,7 +39,7 @@ Your knowledge base, now with a brain. Powered by local **Ollama** integration.
 - **Context Aware**: Chat with your vault, summarize long notes, or brainstorm with an AI that knows your world.
 
 ### 📋 Slash Command Templates
-Stop staring at a blank page. Typed `/template` to choose from curated professional layouts:
+Stop staring at a blank page. Type `/` to choose from curated professional layouts:
 - **Daily Notes** & **Weekly Reviews**
 - **Meeting Minutes**
 - **Bug Reports** & **Code Reviews**
@@ -40,7 +54,7 @@ A professional table experience that doesn't suck.
 Write beautiful equations natively.
 - **KaTeX Integration**: Highly-performant rendering for complex formulas.
 - **Block & Inline Math**: Use `$$` for centered blocks or `$` for inline expressions.
-- **Instant Preview**: Professional typesetting as you type.
+- **File Loading**: Math in `.md` files renders automatically when opened — no re-typing needed.
 
 ### 🌓 Split-View Workspace
 Two brains are better than one.
@@ -71,6 +85,23 @@ Professional document generation.
 
 ---
 
+## ⌨️ Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `⌘K` | Command Palette / Search |
+| `⌘E` | Editor View |
+| `⌘G` | Graph View |
+| `⌘D` | Canvas View |
+| `⌘J` | Journal / Daily Notes |
+| `⌘M` | Kanban Board View |
+| `⌘B` | Toggle Sidebar |
+| `⌘N` | New Note |
+| `/` | Slash Command Menu |
+| `[[` | Insert WikiLink |
+
+---
+
 ## 📦 Installation (macOS)
 
 1. Download the latest **`.dmg`** from the [Releases](https://github.com/EkexDon/NoPes/releases) page.
@@ -88,6 +119,7 @@ Professional document generation.
 - **Visuals**: [Excalidraw](https://excalidraw.com/), [Mermaid.js](https://mermaid.js.org/)
 - **Editor**: [TipTap](https://tiptap.dev/) / ProseMirror
 - **AI Engine**: [Ollama](https://ollama.com/) (Local Llama 3.2)
+- **Math**: [KaTeX](https://katex.org/)
 - **State**: [Zustand](https://github.com/pmndrs/zustand)
 - **Styling**: Vanilla CSS (Premium Dark Mode)
 

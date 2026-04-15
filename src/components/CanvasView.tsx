@@ -4,7 +4,7 @@ import '@excalidraw/excalidraw/index.css';
 import { useStore } from '../store/useStore';
 import { readTextFile, writeFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
-import { X, Save, RefreshCw } from 'lucide-react';
+import { X, RefreshCw } from 'lucide-react';
 
 const ExcalidrawComp = React.lazy(() => import('@excalidraw/excalidraw').then(mod => ({ default: mod.Excalidraw })));
 

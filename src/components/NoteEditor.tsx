@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useId } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useEditor, EditorContent, ReactRenderer, Extension, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import LinkExtension from '@tiptap/extension-link';
@@ -44,7 +44,6 @@ mermaid.initialize({
   startOnLoad: false,
   theme: 'dark',
   darkMode: true,
-  background: 'transparent' as any,
   fontFamily: 'Inter, sans-serif',
   fontSize: 14,
 });
@@ -361,6 +360,7 @@ const SlashCommandList = React.forwardRef<any, any>((props, ref) => {
     const item = props.items[i];
     if (item && !item.isHeader) props.command(item);
   };
+  void pick; // referenced via onKeyDown Enter handler below
   // Flat selectable indices (exclude headers)
   const selectableItems = props.items.filter((it: any) => !it.isHeader);
   React.useImperativeHandle(ref, () => ({
@@ -1029,9 +1029,6 @@ useEffect(() => {
   // ── Search: compute & highlight matches ─────────────────────────────
   const applySearchHighlights = useCallback((q: string, currentIndex: number) => {
     if (!editor) return;
-    const { tr, doc } = editor.state;
-    // Clear existing search marks first via a fresh transaction
-    const cleanTr = editor.state.tr;
     // We use CSS decoration approach via a stored array — no mark needed
     // Instead we scroll the current match into view via DOM
     const editorEl = editor.view.dom as HTMLElement;
@@ -1058,8 +1055,8 @@ useEffect(() => {
     // Collect all text nodes in the editor
     const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT, null);
     const textNodes: Text[] = [];
-    let node: Node | null;
-    while ((node = walker.nextNode())) textNodes.push(node as Text);
+    let node: globalThis.Node | null;
+    while ((node = walker.nextNode())) textNodes.push(node as unknown as Text);
 
     let matches: HTMLElement[] = [];
     textNodes.forEach(textNode => {
@@ -1225,13 +1222,13 @@ useEffect(() => {
               const opt = {
                 margin: 10,
                 filename: `${fileName}.pdf`,
-                image: { type: 'jpeg', quality: 0.98 },
+                image: { type: 'jpeg' as const, quality: 0.98 },
                 html2canvas: { scale: 2, useCORS: true },
                 jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
               };
               
               // Request raw ArrayBuffer to circumvent WKWebView Blob <a> tag blocking
-              const pdfArrayBuffer = await html2pdf().set(opt).from(el).outputPdf('arraybuffer');
+              const pdfArrayBuffer = await html2pdf().set(opt as any).from(el as HTMLElement).outputPdf('arraybuffer');
               
               // Prompt user for save location
               const filePath = await save({
