@@ -4,6 +4,7 @@ import { X, Send, Bot, Loader, AlertCircle, Sparkles, CheckCircle, FileText, Lin
 import { AIService } from '../workers/AIService';
 import { invoke } from '@tauri-apps/api/core';
 import { readTextFile } from '@tauri-apps/plugin-fs';
+import { toast } from 'react-hot-toast';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -45,7 +46,8 @@ async function buildContext(
   activeTab: string | null,
   tabContents: Record<string, string>,
   aiIndex: { path: string; label: string; vec: Float32Array }[],
-  allFiles: { path: string; name: string; is_dir: boolean }[]
+  allFiles: { path: string; name: string; is_dir: boolean }[],
+  graphData: { nodes: any[]; links: any[] }
 ): Promise<{ contextStr: string; loadedNotes: NoteBlock[] }> {
   const loadedNotes: NoteBlock[] = [];
   const seenPaths = new Set<string>();
@@ -55,10 +57,31 @@ async function buildContext(
     const text = await loadNote(activeTab, tabContents);
     const name = activeTab.split('/').pop()?.replace(/\.md$/, '') ?? 'Note';
     if (text) {
-      loadedNotes.push({ name, path: activeTab, text, isActive: true });
+      // Find tags for this note
+      const nodeInfo = graphData.nodes.find(n => n.id === activeTab);
+      const tags = nodeInfo?.tags ?? [];
+      const tagStr = tags.length > 0 ? ` (Tags: ${tags.join(', ')})` : '';
+
+      loadedNotes.push({ name: name + tagStr, path: activeTab, text, isActive: true });
       seenPaths.add(activeTab);
 
-      // 2. Resolve all [[WikiLinks]] from the active note (1-level deep)
+      // 2. Identify Backlinks (notes that link TO this one)
+      const backlinks = graphData.links
+        .filter(l => l.target === activeTab)
+        .map(l => l.source);
+      
+      for (const blPath of backlinks) {
+        if (!seenPaths.has(blPath)) {
+          const blText = await loadNote(blPath, tabContents);
+          const blName = blPath.split('/').pop()?.replace(/\.md$/, '') ?? 'Related';
+          if (blText) {
+            loadedNotes.push({ name: blName, path: blPath, text: blText, isLinked: true });
+            seenPaths.add(blPath);
+          }
+        }
+      }
+
+      // 3. Resolve all [[WikiLinks]] from the active note (Outbound)
       const links = extractWikilinks(text);
       for (const linkName of links) {
         const linkedPath = resolveWikilink(linkName, allFiles);
@@ -98,8 +121,10 @@ async function buildContext(
   // 4. Build prompt string with clear sections
   const lines: string[] = [];
   for (const n of loadedNotes) {
-    const badge = n.isActive ? ' [CURRENT NOTE]' : n.isLinked ? ' [LINKED NOTE]' : ' [RELATED NOTE]';
-    lines.push(`### ${n.name}${badge}\n${n.text.slice(0, 1200)}`);
+    const badge = n.isActive ? ' [CURRENT NOTE]' : n.isLinked ? ' [CONNECTED NOTE]' : ' [SIMILAR NOTE]';
+    // Active note gets more context (4000 chars), others get 1200
+    const limit = n.isActive ? 4000 : 1200;
+    lines.push(`### ${n.name}${badge}\n${n.text.slice(0, limit)}`);
     lines.push('---');
   }
 
@@ -149,7 +174,14 @@ export const VaultChat: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     setLoading(true);
 
     try {
-      const { contextStr, loadedNotes } = await buildContext(q, activeTab, tabContents, aiIndex, allFiles);
+      const { contextStr, loadedNotes } = await buildContext(
+        q, 
+        activeTab, 
+        tabContents, 
+        aiIndex, 
+        allFiles,
+        useStore.getState().graphData
+      );
       setContextNotes(loadedNotes);
 
       const systemPrompt = contextStr
@@ -218,6 +250,37 @@ ${contextStr}`
       setLoading(false);
     }
   }, [messages, loading, ollamaStatus, activeTab, tabContents, aiIndex, allFiles]);
+
+  const saveToNote = useCallback(async (content: string) => {
+    const { activeTab, saveFile, tabContents } = useStore.getState();
+    if (!activeTab) {
+      toast.error('No active note to save to');
+      return;
+    }
+
+    const currentText = tabContents[activeTab] ?? '';
+    let newText = '';
+
+    // If note already has a Summary section, replace it
+    if (currentText.includes('## Summary')) {
+      newText = currentText.replace(/## Summary[\s\S]*?(\n#|$)/, `## Summary\n\n${content}\n\n$1`);
+    } else {
+      // Otherwise, insert at the top (after the first H1 if exists)
+      const h1Match = currentText.match(/^# [^\n]+\n/);
+      if (h1Match) {
+         newText = currentText.replace(h1Match[0], `${h1Match[0]}\n## Summary\n\n${content}\n\n---\n`);
+      } else {
+         newText = `## Summary\n\n${content}\n\n---\n\n${currentText}`;
+      }
+    }
+
+    try {
+      await saveFile(activeTab, newText);
+      toast.success('Summary saved to note');
+    } catch (e) {
+      toast.error('Failed to save summary');
+    }
+  }, []);
 
   // Quick action chips
   const quickActions = activeNoteName ? [
@@ -308,7 +371,18 @@ ${contextStr}`
         )}
         {messages.map((m, i) => (
           <div key={i} className={`chat-message ${m.role}`}>
-            <div className="chat-bubble">{m.content || <Loader size={13} className="spinning" />}</div>
+            <div className="chat-bubble">
+              {m.content || <Loader size={13} className="spinning" />}
+              {m.role === 'assistant' && m.content && !loading && (
+                <button 
+                  className="save-summary-btn" 
+                  title="Save to Note"
+                  onClick={() => saveToNote(m.content)}
+                >
+                  <FileText size={12} /> Save to Note
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>
