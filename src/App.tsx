@@ -45,6 +45,23 @@ type SettingsTab = 'general' | 'appearance' | 'hotkeys';
 const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { vaultPath } = useStore();
   const [tab, setTab] = useState<SettingsTab>('general');
+  const [stats, setStats] = useState({ app: '—', ollama: '—' });
+
+  useEffect(() => {
+    const fetch = async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const res: any = await invoke('get_system_stats');
+        setStats({ 
+          app: res.app_mb > 1024 ? (res.app_mb / 1024).toFixed(1) + ' GB' : res.app_mb + ' MB',
+          ollama: res.ollama_mb > 1024 ? (res.ollama_mb / 1024).toFixed(1) + ' GB' : res.ollama_mb + ' MB'
+        });
+      } catch {}
+    };
+    fetch();
+    const iv = setInterval(fetch, 3000);
+    return () => clearInterval(iv);
+  }, []);
 
   return (
     <div className="settings-overlay" onClick={onClose}>
@@ -82,7 +99,39 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                   <div className="setting-info-label">Auto-save</div>
                   <div className="setting-info-desc">Notes save automatically as you type (400ms debounce).</div>
                 </div>
-                <span className="setting-value">Enabled</span>
+                <label className="nopes-switch">
+                  <input 
+                    type="checkbox" 
+                    checked={useStore.getState().isAutoSaveEnabled} 
+                    onChange={(e) => useStore.getState().setAutoSaveEnabled(e.target.checked)}
+                  />
+                  <span className="nopes-slider"></span>
+                </label>
+              </div>
+              <div className="setting-row">
+                <div>
+                  <div className="setting-info-label">Enable AI Features</div>
+                  <div className="setting-info-desc">Local semantic search and AI Chat (powered by Ollama). Disable to save memory/battery.</div>
+                </div>
+                <label className="nopes-switch">
+                  <input 
+                    type="checkbox" 
+                    checked={useStore.getState().isAiEnabled} 
+                    onChange={(e) => useStore.getState().setAiEnabled(e.target.checked)}
+                  />
+                  <span className="nopes-slider"></span>
+                </label>
+              </div>
+
+              <div style={{ marginTop: '24px', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--bd-1)' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: '12px', letterSpacing: '0.05em', fontWeight: 600 }}>System Resources</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  <ResourceStat label="App + Webview" value={stats.app} />
+                  <ResourceStat label="Ollama Service" value={stats.ollama} />
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--tx-3)', marginTop: '12px', fontStyle: 'italic' }}>
+                  * AI Worker automatically kills itself after 5 mins of inactivity.
+                </div>
               </div>
             </>
           )}
@@ -120,6 +169,13 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     </div>
   );
 };
+
+const ResourceStat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div>
+    <div style={{ fontSize: '10px', color: 'var(--tx-3)', marginBottom: '4px' }}>{label}</div>
+    <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--tx-1)', fontFamily: 'var(--font-mono)' }}>{value}</div>
+  </div>
+);
 
 /* ─── Tab Bar ────────────────────────────────────────────── */
 const TabBar: React.FC = () => {
@@ -185,9 +241,11 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
         <button className="icon-btn" onClick={() => query.toggle()} title="Search (⌘K)">
           <Search size={18} />
         </button>
-        <button className="icon-btn" onClick={() => document.dispatchEvent(new CustomEvent('toggle-chat'))} title="Vault Chat">
-          <Bot size={18} />
-        </button>
+        {useStore.getState().isAiEnabled && (
+          <button className="icon-btn" onClick={() => document.dispatchEvent(new CustomEvent('toggle-chat'))} title="Vault Chat">
+            <Bot size={18} />
+          </button>
+        )}
         <button className="icon-btn" onClick={() => setSidebarOpen(!isSidebarOpen)} title="Toggle Sidebar (⌘B)">
           {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
         </button>
@@ -265,12 +323,17 @@ const App: React.FC = () => {
     document.body.style.cursor = 'col-resize';
   }, [leftWidth]);
 
-  // Restore vault from storage on mount
+  // Restore vault and AI state from storage on mount
   useEffect(() => {
     if (vaultPath) {
       loadFiles();
       loadGraphData();
     }
+    // Manage AI process based on setting
+    const { isAiEnabled } = useStore.getState();
+    import('@tauri-apps/api/core').then(m => {
+      m.invoke('manage_ollama', { active: isAiEnabled }).catch(console.error);
+    });
   }, [vaultPath, loadFiles, loadGraphData]);
 
   const handleOpenVault = useCallback(async () => {

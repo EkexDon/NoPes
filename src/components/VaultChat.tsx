@@ -147,7 +147,7 @@ export const VaultChat: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   // On mount: ensure ollama + model
   useEffect(() => {
     const unsub = AIService.onStatus(setAiStatus);
-    AIService.init().catch(console.error);
+    // AIService.init() removed for lazy loading
 
     setOllamaStatus('checking');
     (invoke('ensure_model') as Promise<string>)

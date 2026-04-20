@@ -724,7 +724,8 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   }, []);
 
   useEffect(() => {
-    if (aiStatus !== 'ready' || content.length < 50 || !aiIndex.length) return;
+    const { isAiEnabled } = useStore.getState();
+    if (!isAiEnabled || aiStatus !== 'ready' || content.length < 50 || !aiIndex.length) return;
     const to = setTimeout(async () => {
       try {
         const qVec = await AIService.embedQuery(content);
@@ -897,6 +898,9 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       content,
       onUpdate: ({ editor }) => {
         if (!currentTab) return;
+        const { isAutoSaveEnabled } = useStore.getState();
+        if (!isAutoSaveEnabled) return;
+
         const md = (editor.storage as any).markdown.getMarkdown();
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         setSaving(true);

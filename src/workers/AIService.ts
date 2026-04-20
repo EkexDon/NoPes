@@ -8,9 +8,20 @@ let worker: Worker | null = null;
 let pendingCallbacks: Map<string, { resolve: (v: any) => void; reject: (e: any) => void }> = new Map();
 let statusListeners: ((status: 'idle' | 'loading' | 'ready' | 'error') => void)[] = [];
 let progressListeners: ((done: number, total: number) => void)[] = [];
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    console.log('[AIService] Idle timeout reached. Terminating worker to save memory.');
+    AIService.terminate();
+  }, IDLE_TIMEOUT);
+}
 
 function getWorker(): Worker {
   if (!worker) {
+    console.log('[AIService] Spawning AI worker...');
     worker = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = (e: MessageEvent) => {
       const { type, id } = e.data;
@@ -35,12 +46,14 @@ function getWorker(): Worker {
 
 function call<T>(msg: object, transfer?: Transferable[]): Promise<T> {
   const id = Math.random().toString(36).slice(2);
+  resetIdleTimer();
   return new Promise((resolve, reject) => {
     pendingCallbacks.set(id, { resolve, reject });
+    const w = getWorker();
     if (transfer?.length) {
-      getWorker().postMessage({ ...msg, id }, transfer);
+      w.postMessage({ ...msg, id }, transfer);
     } else {
-      getWorker().postMessage({ ...msg, id });
+      w.postMessage({ ...msg, id });
     }
   });
 }
@@ -80,5 +93,21 @@ export const AIService = {
       [queryVec.buffer],
     );
     return res.results;
+  },
+
+  terminate() {
+    if (worker) {
+      worker.terminate();
+      worker = null;
+      statusListeners.forEach(fn => fn('idle'));
+      console.log('[AIService] AI worker terminated.');
+    }
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+    // Reject any pending callbacks
+    pendingCallbacks.forEach(({ reject }) => reject(new Error('Worker terminated')));
+    pendingCallbacks.clear();
   },
 };

@@ -57,6 +57,7 @@ interface AppState {
 
   isSidebarOpen: boolean;
   isRefreshing: boolean;
+  isAutoSaveEnabled: boolean;
   graphData: GraphData;
   viewMode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban';
 
@@ -72,7 +73,8 @@ interface AppState {
   // Journal / Heatmap
   journalStats: Record<string, number>; // 'YYYY-MM-DD' -> word count
 
-  // AI Semantic Search & API Key
+  // AI Toggle & Semantic Search
+  isAiEnabled: boolean;
   aiIndex: { path: string; label: string; vec: Float32Array }[];
   aiApiKey: string | null;
 
@@ -101,7 +103,10 @@ interface AppState {
   createNodeFromGraph: () => Promise<void>;
   computeJournalStats: () => Promise<void>;
   buildAiIndex: () => Promise<void>;
+  loadAiIndex: () => Promise<void>;
   setAiApiKey: (key: string) => void;
+  setAiEnabled: (v: boolean) => void;
+  setAutoSaveEnabled: (v: boolean) => void;
 
   // File conversion/import
   importFiles: (paths: string[]) => Promise<void>;
@@ -151,12 +156,14 @@ export const useStore = create<AppState>((set, get) => ({
 
   isSidebarOpen: true,
   isRefreshing: false,
+  isAutoSaveEnabled: localStorage.getItem('nopes_autosave_enabled') !== 'false', // default true
   graphData: { nodes: [], links: [] },
   viewMode: 'editor',
   isSplitView: false,
   rightActiveTab: null,
   rightViewMode: 'graph',
   journalStats: {},
+  isAiEnabled: localStorage.getItem('nopes_ai_enabled') !== 'false', // default true
   aiIndex: [],
   aiApiKey: localStorage.getItem('nopes_ai_key'),
 
@@ -235,7 +242,11 @@ export const useStore = create<AppState>((set, get) => ({
 
       set({ files: filteredTree, allFiles: filteredFlatList });
       console.log('Scan complete. Found:', filteredFlatList.length, 'notes.');
-      get().buildAiIndex();
+      
+      // Load AI index from cache if it exists, otherwise build it lazily (if enabled)
+      if (get().isAiEnabled) {
+        await get().loadAiIndex();
+      }
       
       // Auto-convert any docx found in the scan
       for (const f of fullFlatList) {
@@ -434,8 +445,10 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   loadGraphData: async (override?) => {
-    const { allFiles } = get();
-    if (!allFiles.length) return;
+    const { allFiles, viewMode } = get();
+    // Optimization: Only run full graph scan if we are actually in graph mode or it's an override (save)
+    if (!allFiles.length || (viewMode !== 'graph' && !override)) return;
+    
     try {
       const nodes: { id: string; label: string; tags: string[] }[] = [];
       const links: { source: string; target: string }[] = [];
@@ -449,6 +462,7 @@ export const useStore = create<AppState>((set, get) => ({
           const { tabContents } = get();
           text = tabContents[file.path] ?? '';
           if (!text) {
+            // Only read from disk if absolutely necessary (this is the expensive part)
             try { text = await readTextFile(file.path); } catch { continue; }
           }
         }
@@ -516,7 +530,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   buildAiIndex: async () => {
-    const { allFiles, tabContents } = get();
+    const { allFiles, tabContents, vaultPath, isAiEnabled } = get();
+    if (!vaultPath || !isAiEnabled) return;
+
     const docsToEmbed: { path: string; text: string }[] = [];
     
     for (const f of allFiles) {
@@ -532,6 +548,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     if (!docsToEmbed.length) return;
     try {
+      toast.loading('Building AI index (this may take a minute)...', { id: 'ai-index' });
       const results = await AIService.embedDocs(docsToEmbed);
       const newIndex = results.map(r => ({
         path: r.path,
@@ -539,8 +556,41 @@ export const useStore = create<AppState>((set, get) => ({
         vec: r.vec
       }));
       set({ aiIndex: newIndex });
+      
+      // Save to cache
+      const cachePath = await join(vaultPath, '.nopes_embeddings.json');
+      // Convert Float32Array to regular array for JSON serialization
+      const serializableIndex = newIndex.map(item => ({
+        ...item,
+        vec: Array.from(item.vec)
+      }));
+      await writeTextFile(cachePath, JSON.stringify(serializableIndex));
+      
+      toast.success('AI index built and cached', { id: 'ai-index' });
     } catch (err) {
       console.error('Failed to build AI index:', err);
+      toast.error('Failed to build AI index', { id: 'ai-index' });
+    }
+  },
+
+  loadAiIndex: async () => {
+    const { vaultPath } = get();
+    if (!vaultPath) return;
+    const cachePath = await join(vaultPath, '.nopes_embeddings.json');
+    
+    if (await exists(cachePath)) {
+      try {
+        const content = await readTextFile(cachePath);
+        const data = JSON.parse(content);
+        const restoredIndex = data.map((item: any) => ({
+          ...item,
+          vec: new Float32Array(item.vec)
+        }));
+        set({ aiIndex: restoredIndex });
+        console.log('[Store] AI index restored from cache');
+      } catch (e) {
+        console.warn('Failed to load AI index cache:', e);
+      }
     }
   },
 
@@ -681,6 +731,25 @@ export const useStore = create<AppState>((set, get) => ({
     } finally {
       set({ isRefreshing: false });
     }
+  },
+
+  setAiEnabled: (v) => {
+    localStorage.setItem('nopes_ai_enabled', String(v));
+    set({ isAiEnabled: v });
+    import('@tauri-apps/api/core').then(m => {
+       m.invoke('manage_ollama', { active: v }).catch(console.error);
+    });
+    if (!v) {
+       set({ aiIndex: [] }); // Clear memory
+       AIService.terminate(); // Kill the worker thread
+    } else {
+       get().loadAiIndex(); // Restore if turned back on
+    }
+  },
+
+  setAutoSaveEnabled: (v) => {
+    localStorage.setItem('nopes_autosave_enabled', String(v));
+    set({ isAutoSaveEnabled: v });
   },
 
   testToast: () => {
