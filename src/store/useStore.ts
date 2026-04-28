@@ -15,6 +15,53 @@ import {
 import { toast } from 'react-hot-toast';
 import { AIService } from '../workers/AIService';
 
+export async function scanDir(root: string, opts: { maxDepth: number; maxEntries: number; visited: Set<string> }, favorites: string[]): Promise<{ entries: FileInfo[]; truncated: boolean }> {
+  if (opts.maxDepth <= 0 || opts.visited.size >= opts.maxEntries) return { entries: [], truncated: true };
+  
+  let canonical = root;
+  try {
+    canonical = root; // Tauri canonicalize might not be available, fallback to path tracking
+  } catch {}
+
+  if (opts.visited.has(canonical)) {
+    console.warn('[scan] symlink cycle skipped', canonical);
+    return { entries: [], truncated: false };
+  }
+  opts.visited.add(canonical);
+
+  let dirEntries;
+  try { dirEntries = await readDir(root); } catch { return { entries: [], truncated: false }; }
+
+  const results: FileInfo[] = [];
+  let truncated = false;
+
+  for (const entry of dirEntries) {
+    if (opts.visited.size >= opts.maxEntries) { truncated = true; break; }
+    const fullPath = await join(root, entry.name);
+    const info: FileInfo = {
+      name: entry.name,
+      path: fullPath,
+      is_dir: entry.isDirectory,
+      isFavorite: !!favorites?.includes(fullPath)
+    };
+
+    if (entry.isDirectory) {
+      const childRes = await scanDir(fullPath, { maxDepth: opts.maxDepth - 1, maxEntries: opts.maxEntries, visited: opts.visited }, favorites);
+      info.children = childRes.entries;
+      if (childRes.truncated) truncated = true;
+    }
+    results.push(info);
+  }
+
+  return {
+    entries: results.sort((a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    }),
+    truncated
+  };
+}
+
 export interface FileInfo {
   name: string;
   path: string;
@@ -196,31 +243,8 @@ export const useStore = create<AppState>((set, get) => ({
 
     set({ isRefreshing: true });
     try {
-      const scan = async (dirPath: string): Promise<FileInfo[]> => {
-        const entries = await readDir(dirPath);
-        const results: FileInfo[] = [];
-
-        for (const entry of entries) {
-          const fullPath = await join(dirPath, entry.name);
-          const info: FileInfo = {
-            name: entry.name,
-            path: fullPath,
-            is_dir: entry.isDirectory,
-            isFavorite: favorites.includes(fullPath)
-          };
-
-          if (entry.isDirectory) {
-            info.children = await scan(fullPath);
-          }
-          results.push(info);
-        }
-        return results.sort((a, b) => {
-          if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-      };
-
-      const rawScanResult = await scan(vaultPath);
+      const { entries: rawScanResult, truncated } = await scanDir(vaultPath, { maxDepth: 12, maxEntries: 20000, visited: new Set() }, favorites);
+      if (truncated) console.warn('Scan truncated due to maxDepth or maxEntries limits.');
       const filteredTree = rawScanResult.filter(f => 
         !f.name.toLowerCase().endsWith('.docx') && 
         f.name !== '_word_archive'

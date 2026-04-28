@@ -699,6 +699,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const [aiStatus, setAiStatus] = useState('idle');
   const allFilesRef = useRef(allFiles);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editorRef = useRef<any>(null);
 
   // ── In-note search state ──────────────────────────────────────────────
   const [showSearch, setShowSearch] = useState(false);
@@ -917,6 +918,26 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
     [currentTab],
   );
 
+  // Robust cleanup of prior editor instances (L-01)
+  useEffect(() => {
+    if (editor) {
+      editorRef.current = editor;
+    }
+    return () => {
+      if (editorRef.current) {
+        console.log('[NoteEditor] Explicitly destroying editor instance.');
+        try {
+          // Clear folding decorations to free references (L-01)
+          editorRef.current.commands.clearFolding?.();
+        } catch (e) {
+          console.warn('[NoteEditor] Failed to clear folding before destroy:', e);
+        }
+        editorRef.current.destroy();
+        editorRef.current = null;
+      }
+    };
+  }, [editor]);
+
   // Sync content when tab changes
   useEffect(() => {
     if (!editor) return;
@@ -996,7 +1017,7 @@ const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
 const closeCtxMenu = () => setCtxMenu(null);
 
 const deleteMediaNode = () => {
-  if (!editor || !ctxMenu) return;
+  if (!editor || editor.isDestroyed || !ctxMenu) return;
   try {
     const view = editor.view;
     // Walk up from the clicked DOM element to find the node wrapper
@@ -1032,7 +1053,7 @@ useEffect(() => {
 
   // ── Search: compute & highlight matches ─────────────────────────────
   const applySearchHighlights = useCallback((q: string, currentIndex: number) => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     // We use CSS decoration approach via a stored array — no mark needed
     // Instead we scroll the current match into view via DOM
     const editorEl = editor.view.dom as HTMLElement;
@@ -1104,7 +1125,7 @@ useEffect(() => {
   useEffect(() => {
     if (!showSearch) {
       // Clear highlights when panel is closed
-      if (editor) {
+      if (editor && !editor.isDestroyed) {
         const editorEl = editor.view.dom as HTMLElement;
         editorEl.querySelectorAll('.search-highlight, .search-highlight-current').forEach(el => {
           const text = document.createTextNode(el.textContent || '');
@@ -1124,7 +1145,7 @@ useEffect(() => {
   }, [searchQuery]);
 
   const navigateSearch = useCallback((direction: 'next' | 'prev') => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     const editorEl = editor.view.dom as HTMLElement;
     const marks = Array.from(editorEl.querySelectorAll<HTMLElement>('.search-highlight'));
     if (!marks.length) return;
