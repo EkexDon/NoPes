@@ -12,6 +12,7 @@ env.useBrowserCache  = true;
 type Embedder = Awaited<ReturnType<typeof pipeline>>;
 
 let embedder: Embedder | null = null;
+let searchIndex: { path: string; label: string; vec: Float32Array }[] = [];
 
 /** Cosine similarity between two Float32Arrays */
 function cosineSim(a: Float32Array, b: Float32Array): number {
@@ -93,15 +94,22 @@ self.onmessage = async (event: MessageEvent) => {
       const transferables = results.map(r => r.vec.buffer);
       self.postMessage({ type: 'EMBED_DOCS_OK', id, results }, { transfer: transferables });
 
+    } else if (type === 'SET_INDEX') {
+      const { index } = event.data as {
+        index: { path: string; label: string; vec: Float32Array }[];
+        id: string;
+      };
+      searchIndex = index;
+      self.postMessage({ type: 'SET_INDEX_OK', id });
+
     } else if (type === 'SEARCH') {
       // Semantic search: rank stored embeddings against query embedding
-      const { queryVec, index, topK } = event.data as {
+      const { queryVec, topK } = event.data as {
         queryVec: Float32Array;
-        index: { path: string; label: string; vec: Float32Array }[];
         topK: number;
         id: string;
       };
-      const scored = index.map(entry => ({
+      const scored = searchIndex.map(entry => ({
         path: entry.path,
         label: entry.label,
         score: cosineSim(queryVec, entry.vec),
