@@ -1819,6 +1819,60 @@ button:disabled {
   transition: background 0.15s, outline 0.15s;
 }
 
+.editor-body.drag-over::after {
+  content: 'Drop files to import';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(124, 109, 255, 0.06);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+  z-index: 10;
+  animation: drop-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes drop-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+.editor-body.importing { position: relative; }
+
+/* ── Import overlay (file copy in progress) ────────── */
+.import-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(22, 22, 22, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 20;
+  color: var(--tx-2);
+  font-size: 0.9rem;
+  border-radius: var(--radius-md);
+}
+
+.import-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--bg-3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Media elements inside editor — clean presentation */
 .editor-body img,
 .editor-body video {

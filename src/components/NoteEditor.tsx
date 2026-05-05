@@ -38,6 +38,7 @@ import { AIService } from '../workers/AIService';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { disposeEditorInstance } from './editorLifecycle';
 
 // Init mermaid once
 mermaid.initialize({
@@ -61,7 +62,12 @@ const resolveAssetSrc = (relPath: string): string => {
   if (!vault) return relPath;
   const sep = vault.includes('\\') ? '\\' : '/';
   const absPath = `${vault}${sep}${relPath}`;
-  return convertFileSrc(absPath);
+  try {
+    return convertFileSrc(absPath);
+  } catch (e) {
+    console.warn('[NoPes:Asset] Failed to resolve asset path:', relPath, e);
+    return relPath;
+  }
 };
 
 const NopesImage = Image.extend({
@@ -76,31 +82,57 @@ const NopesImage = Image.extend({
       if (isPdf) {
         // ── PDF: full native iframe using WebKit's built-in PDF renderer ──
         const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'margin:1rem 0;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.4);';
+        wrapper.style.cssText = 'margin:1rem 0;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.4);position:relative;';
+        
+        // Loading indicator
+        const loader = document.createElement('div');
+        loader.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.3);color:#aaa;font-size:13px;z-index:1;';
+        loader.textContent = 'Loading PDF…';
+        wrapper.appendChild(loader);
         
         const iframe = document.createElement('iframe');
         iframe.src = resolveAssetSrc(relPath);
-        iframe.style.cssText = 'width:100%;height:80vh;border:none;display:block;border-radius:8px;';
+        iframe.style.cssText = 'width:100%;height:80vh;border:none;display:block;border-radius:8px;position:relative;z-index:2;';
         iframe.setAttribute('title', relPath.split(/[\/\\]/).pop() || 'PDF');
+        iframe.setAttribute('loading', 'lazy');
+        iframe.onload = () => { loader.remove(); };
+        iframe.onerror = () => { loader.textContent = 'Failed to load PDF'; };
         
         wrapper.appendChild(iframe);
         dom = wrapper;
       } else if (isVideo) {
         // ── Video: native <video> with controls ──────────────────────
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'margin:1rem 0;position:relative;';
+        
         dom = document.createElement('video');
         const vid = dom as HTMLVideoElement;
         vid.src = resolveAssetSrc(relPath);
         vid.controls = true;
         vid.loop = false;
-        vid.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
+        vid.preload = 'metadata'; // Don't preload full video, just metadata for zero-latency first frame
+        vid.style.cssText = 'max-width:100%;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
+        vid.onerror = () => {
+          vid.style.opacity = '0.4';
+          vid.insertAdjacentHTML('afterend', '<div style="color:#f87171;font-size:12px;margin-top:4px;">⚠ Video failed to load</div>');
+        };
+        
+        wrapper.appendChild(vid);
+        dom = wrapper;
       } else {
         // ── Image ────────────────────────────────────────────────────
         dom = document.createElement('img');
         const img = dom as HTMLImageElement;
         img.src = resolveAssetSrc(relPath);
+        img.setAttribute('loading', 'lazy'); // Lazy load for performance
         if (node.attrs.alt)   img.alt   = node.attrs.alt;
         if (node.attrs.title) img.title = node.attrs.title;
-        img.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
+        img.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;transition:opacity 0.3s;';
+        img.onload = () => { img.style.opacity = '1'; };
+        img.onerror = () => {
+          img.style.opacity = '0.3';
+          img.alt = `⚠ Image not found: ${relPath}`;
+        };
       }
 
       return { dom } as any;
@@ -698,6 +730,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
   const [aiStatus, setAiStatus] = useState('idle');
   const allFilesRef = useRef(allFiles);
+  const tabContentsRef = useRef(tabContents);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<any>(null);
 
@@ -713,6 +746,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
 
   const content = currentTab ? (tabContents[currentTab] ?? '') : '';
   useEffect(() => { allFilesRef.current = allFiles; }, [allFiles]);
+  useEffect(() => { tabContentsRef.current = tabContents; }, [tabContents]);
 
   const fileName = currentTab?.split('/').pop()?.replace(/\.md$/, '') ?? 'Untitled';
   const backlinks = graphData.links.filter(l => l.target === currentTab);
@@ -731,10 +765,11 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       try {
         const qVec = await AIService.embedQuery(content);
         const hits = await AIService.search(qVec, aiIndex, 5);
+        const cachedContents = tabContentsRef.current;
         const tags = new Set<string>();
         for (const h of hits) {
           if (h.score < 0.25 || h.path === currentTab) continue;
-          const text = tabContents[h.path];
+          const text = cachedContents[h.path];
           if (text) {
             extractTags(text).forEach(t => tags.add(t));
           }
@@ -745,7 +780,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       } catch {}
     }, 1500);
     return () => clearTimeout(to);
-  }, [content, aiIndex, aiStatus, currentTab, tabContents]);
+  }, [content, aiIndex, aiStatus, currentTab]);
 
   const [unlinkedMentions, setUnlinkedMentions] = useState<typeof allFiles>([]);
 
@@ -758,12 +793,13 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
     const computeUnlinked = async () => {
       const mentions: typeof allFiles = [];
       const lowerName = fileName.toLowerCase();
+      const cachedContents = tabContentsRef.current;
       
       for (const f of allFiles) {
         if (f.path === currentTab) continue;
         if (backlinksFiles.find(b => b.path === f.path)) continue;
         
-        let text = tabContents[f.path];
+        let text = cachedContents[f.path];
         if (text === undefined) {
            try { text = await readTextFile(f.path); } catch { text = ''; }
         }
@@ -776,7 +812,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
     };
     computeUnlinked();
     return () => { cancel = true; };
-  }, [currentTab, fileName, allFiles, backlinksFiles, tabContents]);
+  }, [currentTab, fileName, allFiles, backlinksFiles]);
 
   const insertImage = async (editor: ReturnType<typeof useEditor>) => {
     if (!editor) return;
@@ -924,39 +960,45 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       editorRef.current = editor;
     }
     return () => {
+      // Cancel any pending autosave to prevent writes to a dead editor
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
       if (editorRef.current) {
         console.log('[NoteEditor] Explicitly destroying editor instance.');
-        try {
-          // Clear folding decorations to free references (L-01)
-          editorRef.current.commands.clearFolding?.();
-        } catch (e) {
-          console.warn('[NoteEditor] Failed to clear folding before destroy:', e);
-        }
-        editorRef.current.destroy();
-        editorRef.current = null;
+        editorRef.current = disposeEditorInstance(editorRef.current);
       }
     };
   }, [editor]);
 
   // Sync content when tab changes
   useEffect(() => {
-    if (!editor) return;
-    const curr = (editor.storage as any).markdown?.getMarkdown?.() ?? '';
-    if (curr !== content) {
-      editor.commands.setContent(preprocessMath(content), { emitUpdate: false } as any);
+    if (!editor || editor.isDestroyed) return;
+    try {
+      const curr = (editor.storage as any).markdown?.getMarkdown?.() ?? '';
+      if (curr !== content) {
+        editor.commands.setContent(preprocessMath(content), { emitUpdate: false } as any);
+      }
+    } catch (e) {
+      console.warn('[NoteEditor] Content sync failed (editor may be transitioning):', e);
     }
   }, [currentTab, content]);
 
   // Auto-insert dragged assets
   useEffect(() => {
-  if (editor && pendingAssetInserts.length > 0) {
-    pendingAssetInserts.forEach(pth => {
-      // TipTap Image Extension syntax -> inserts the logical path natively into the doc.
-      editor.chain().focus().setImage({ src: pth }).run();
-    });
-    setPendingAssetInserts([]);
-  }
-}, [editor, pendingAssetInserts, setPendingAssetInserts]);
+    if (editor && !editor.isDestroyed && pendingAssetInserts.length > 0) {
+      try {
+        pendingAssetInserts.forEach(pth => {
+          // TipTap Image Extension syntax -> inserts the logical path natively into the doc.
+          editor.chain().focus().setImage({ src: pth }).run();
+        });
+      } catch (e) {
+        console.warn('[NoteEditor] Failed to insert dragged assets:', e);
+      }
+      setPendingAssetInserts([]);
+    }
+  }, [editor, pendingAssetInserts, setPendingAssetInserts]);
 
 // Drag-and-drop handler (used via JSX props on editor-body)
 const [isDragOver, setIsDragOver] = useState(false);
@@ -969,35 +1011,52 @@ const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
 
 const handleDragLeave = () => setIsDragOver(false);
 
+const [isImporting, setIsImporting] = useState(false);
+
 const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
   e.preventDefault();
   setIsDragOver(false);
   const files = e.dataTransfer?.files;
   if (!files || files.length === 0) return;
-  const assetsDir = await join(useStore.getState().vaultPath || '', 'assets');
-  if (!(await exists(assetsDir))) {
-    await mkdir(assetsDir);
-  }
-  const newInserts: string[] = [];
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-    if (!['png','jpg','jpeg','gif','webp','svg','mp4','webm','mov','pdf'].includes(ext)) continue;
-    const arrayBuf = await file.arrayBuffer();
-    const uint8 = new Uint8Array(arrayBuf);
-    const uniqueName = `${Date.now()}_${file.name}`;
-    const targetPath = await join(assetsDir, uniqueName);
-    await writeFile(targetPath, uint8);
-    const relPath = 'assets/' + uniqueName;
-    newInserts.push(relPath);
-    useStore.getState().addMedia({
-      id: `${Date.now()}_${i}`,
-      type: ['mp4','webm','mov'].includes(ext) ? 'video' : 'image',
-      src: relPath,
-    });
-  }
-  if (newInserts.length) {
-    setPendingAssetInserts([...pendingAssetInserts, ...newInserts]);
+  
+  setIsImporting(true);
+  try {
+    const assetsDir = await join(useStore.getState().vaultPath || '', 'assets');
+    if (!(await exists(assetsDir))) {
+      await mkdir(assetsDir);
+    }
+    const newInserts: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+      if (!['png','jpg','jpeg','gif','webp','svg','mp4','webm','mov','pdf'].includes(ext)) continue;
+      try {
+        const arrayBuf = await file.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuf);
+        const uniqueName = `${Date.now()}_${file.name}`;
+        const targetPath = await join(assetsDir, uniqueName);
+        await writeFile(targetPath, uint8);
+        const relPath = 'assets/' + uniqueName;
+        newInserts.push(relPath);
+        useStore.getState().addMedia({
+          id: `${Date.now()}_${i}`,
+          type: ['mp4','webm','mov'].includes(ext) ? 'video' : 'image',
+          src: relPath,
+        });
+      } catch (fileErr) {
+        console.error(`[NoPes:Drop] Failed to import ${file.name}:`, fileErr);
+        import('react-hot-toast').then(m => m.toast.error(`Failed to import ${file.name}`));
+      }
+    }
+    if (newInserts.length) {
+      setPendingAssetInserts([...pendingAssetInserts, ...newInserts]);
+      import('react-hot-toast').then(m => m.toast.success(`Imported ${newInserts.length} file(s)`));
+    }
+  } catch (err) {
+    console.error('[NoPes:Drop] Import failed:', err);
+    import('react-hot-toast').then(m => m.toast.error('Media import failed'));
+  } finally {
+    setIsImporting(false);
   }
 };
 
@@ -1171,8 +1230,18 @@ useEffect(() => {
     return () => document.removeEventListener('keydown', handleKey);
   }, [currentTab]);
 
+  // Ref to track cleanup functions for tippy delegate & click handler
+  const tippyCleanupRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
+    
+    // Clean up previous tippy delegate if it exists (prevents leak on editor recreation)
+    if (tippyCleanupRef.current) {
+      tippyCleanupRef.current();
+      tippyCleanupRef.current = null;
+    }
+
     const instance = delegate(document.body, {
       target: '.wikilink-marker',
       content(reference) {
@@ -1187,28 +1256,24 @@ useEffect(() => {
       allowHTML: true,
       theme: 'nopes',
       placement: 'top',
-      interactive: false, // Prevents the tooltip from being a separate "window" that steals mouse events
+      interactive: false,
       delay: [50, 0],
       offset: [0, 8],
     });
     
-    // Hard native mousedown listener to absolutely guarantee it intercepts before ProseMirror's mousedown handlers
+    // Hard native mousedown listener to intercept before ProseMirror's mousedown handlers
     const handleGlobalClick = (e: MouseEvent) => {
       let target = e.target as HTMLElement;
-      // Handle clicks on text nodes inside the marker
       if (target && (target as any).nodeType === 3) target = target.parentElement as HTMLElement;
       if (!target || !target.closest) return;
       
       const marker = target.closest('.wikilink-marker');
       if (marker) {
-         console.log('--- WIKILINK MOUSEDOWN DETECTED ---');
          e.preventDefault();
          e.stopPropagation();
          
          const linkName = marker.getAttribute('data-target') || '';
          const file = allFilesRef.current.find(f => f.name.replace(/\.md$/, '').toLowerCase() === linkName.toLowerCase());
-         
-         console.log('Target:', linkName, 'Found file:', file?.path);
          
          if (file) {
            storeActionsRef.current.openFile(file.path);
@@ -1220,10 +1285,13 @@ useEffect(() => {
     
     document.addEventListener('mousedown', handleGlobalClick, true);
 
-    return () => {
+    const cleanup = () => {
       instance.destroy();
       document.removeEventListener('mousedown', handleGlobalClick, true);
     };
+    tippyCleanupRef.current = cleanup;
+
+    return cleanup;
   }, [editor]);
 
   if (!currentTab) return null;
@@ -1316,12 +1384,18 @@ useEffect(() => {
         }}
       >
         <div
-          className={`editor-body${isDragOver ? ' drag-over' : ''}`}
+          className={`editor-body${isDragOver ? ' drag-over' : ''}${isImporting ? ' importing' : ''}`}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onContextMenu={handleContextMenu}
         >
+          {isImporting && (
+            <div className="import-overlay">
+              <div className="import-spinner" />
+              <span>Importing media…</span>
+            </div>
+          )}
           <div className="note-title">{fileName}</div>
           <EditorContent editor={editor} />
           

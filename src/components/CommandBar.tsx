@@ -75,8 +75,8 @@ const SemanticResults: React.FC<{
 };
 
 /* ─── AI Status Badge ────────────────────────────────────── */
-const AIBadge: React.FC<{ status: string }> = ({ status }) => {
-  if (status === 'ready') return null;
+const AIBadge: React.FC<{ status: string; enabled: boolean }> = ({ status, enabled }) => {
+  if (!enabled || status === 'ready') return null;
   return (
     <div className="ai-badge">
       {status === 'loading' ? (
@@ -90,17 +90,16 @@ const AIBadge: React.FC<{ status: string }> = ({ status }) => {
 
 /* ─── CommandBar Content ─────────────────────────────────── */
 const CommandBarContent: React.FC = () => {
-  const { allFiles, openFile, setViewMode, createFile, aiIndex } = useStore();
+  const { allFiles, openFile, setViewMode, createFile, aiIndex, isAiEnabled } = useStore();
   const { query } = useKBar();
   const [aiStatus, setAiStatus]           = useState<string>('idle');
   const [semanticHits, setSemanticHits]   = useState<{ path: string; label: string; score: number }[]>([]);
   const searchDebounce                    = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const lastQuery                         = useRef('');
 
-  // Bootstrap AI engine once
+  // Track worker status, but keep model lazy to avoid idle memory usage.
   useEffect(() => {
     const unsub = AIService.onStatus(setAiStatus);
-    AIService.init().catch(console.error);
     return unsub;
   }, []);
 
@@ -113,10 +112,15 @@ const CommandBarContent: React.FC = () => {
       if (q === lastQuery.current) return;
       lastQuery.current = q;
       if (searchDebounce.current !== undefined) clearTimeout(searchDebounce.current);
-      if (q.length < 3 || aiStatus !== 'ready' || !aiIndex.length) {
+      if (q.length < 3 || !isAiEnabled || !aiIndex.length) {
         setSemanticHits([]);
         return;
       }
+      if (aiStatus === 'idle') {
+        AIService.init().catch(console.error);
+        return;
+      }
+      if (aiStatus !== 'ready') return;
       searchDebounce.current = setTimeout(async () => {
         try {
           const qVec  = await AIService.embedQuery(q);
@@ -127,7 +131,7 @@ const CommandBarContent: React.FC = () => {
     };
     el.addEventListener('input', handler);
     return () => { el.removeEventListener('input', handler); if (searchDebounce.current !== undefined) clearTimeout(searchDebounce.current); };
-  }, [aiStatus, aiIndex]);
+  }, [aiStatus, aiIndex, isAiEnabled]);
 
   const actions = useMemo(() => {
     const fileActions = allFiles
@@ -162,7 +166,7 @@ const CommandBarContent: React.FC = () => {
             <Search16 />
             <KBarSearch className="kbar-search" defaultPlaceholder="Search notes or type a command…" />
           </div>
-          <AIBadge status={aiStatus} />
+          <AIBadge status={aiStatus} enabled={isAiEnabled && aiIndex.length > 0} />
           <SemanticResults
             results={semanticHits}
             onPick={path => { openFile(path); setViewMode('editor'); query.toggle(); setSemanticHits([]); }}

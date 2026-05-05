@@ -84,6 +84,11 @@ Professional document generation.
 - **Command Bar (Cmd+K)**: Blazing fast navigation via a keyboard-driven command palette.
 - **Word to Markdown**: Drag-and-drop `.docx` files for instant, high-fidelity conversion.
 - **Rich Media**: Native inline support for PDFs (full scrollable iframe), Videos, and Images.
+- **Memory Guardrails**:
+  - AI embedding model is lazy-loaded (only when semantic features are actually used).
+  - AI index is deduplicated, sanitized, and hard-capped to prevent unbounded growth.
+  - Editor autosave no longer triggers full graph rescans on every keystroke.
+  - Resource stats separate **App Process**, **Nopes WebView**, and **Ollama** memory.
 
 ---
 

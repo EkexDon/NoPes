@@ -19,19 +19,46 @@ import { CanvasView } from './components/CanvasView';
 import { KanbanView } from './components/KanbanView';
 
 /* ─── Error Boundary ─────────────────────────────────────── */
-class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
-  constructor(props: any) { super(props); this.state = { hasError: false, error: null }; }
-  static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
-  componentDidCatch(error: Error, errorInfo: any) { console.error('ErrorBoundary caught:', error, errorInfo); }
+const MAX_AUTO_RETRIES = 2;
+class ErrorBoundary extends React.Component<
+  {children: React.ReactNode},
+  {hasError: boolean, error: Error | null, retryCount: number, crashTime: string | null}
+> {
+  constructor(props: any) { super(props); this.state = { hasError: false, error: null, retryCount: 0, crashTime: null }; }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error, crashTime: new Date().toISOString() };
+  }
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error(`[NoPes:ErrorBoundary] Crash #${this.state.retryCount + 1} at ${new Date().toISOString()}`, error, errorInfo);
+    // Auto-retry on first crash (transient Strict-Mode race conditions, etc.)
+    if (this.state.retryCount < MAX_AUTO_RETRIES) {
+      const delay = 1500 * (this.state.retryCount + 1); // exponential-ish backoff
+      console.warn(`[NoPes:ErrorBoundary] Auto-retry in ${delay}ms...`);
+      setTimeout(() => {
+        this.setState(prev => ({ hasError: false, error: null, retryCount: prev.retryCount + 1 }));
+      }, delay);
+    }
+  }
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '40px', background: 'var(--bg-0)', color: 'var(--tx-1)', height: '100vh', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <h2>Whoops, Nopes crashed! (The Black Screen)</h2>
-          <pre style={{ background: '#300', padding: '16px', borderRadius: '4px', overflow: 'auto', fontSize: '13px' }}>
+        <div style={{ padding: '40px', background: 'var(--bg-0, #1a1a2e)', color: 'var(--tx-1, #e8e8e8)', height: '100vh', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <h2 style={{ margin: 0 }}>Whoops — NoPes ran into a problem</h2>
+          <div style={{ fontSize: '13px', color: 'var(--tx-3, #888)' }}>
+            {this.state.retryCount < MAX_AUTO_RETRIES
+              ? `Auto-recovering (attempt ${this.state.retryCount + 1}/${MAX_AUTO_RETRIES})…`
+              : `Recovery failed after ${MAX_AUTO_RETRIES} attempts. The error is shown below.`
+            }
+          </div>
+          <pre style={{ background: 'rgba(180,30,30,0.15)', padding: '16px', borderRadius: '8px', overflow: 'auto', fontSize: '12px', lineHeight: '1.6', border: '1px solid rgba(255,60,60,0.2)', maxHeight: '40vh' }}>
+            <strong>Time:</strong> {this.state.crashTime}{'\n'}
+            <strong>Attempt:</strong> {this.state.retryCount}/{MAX_AUTO_RETRIES}{'\n\n'}
             {this.state.error?.stack || this.state.error?.message}
           </pre>
-          <button onClick={() => window.location.reload()} style={{ padding: '8px 16px', borderRadius: '4px', background: 'var(--accent)', alignSelf: 'flex-start', color: '#fff' }}>Reload Application</button>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button onClick={() => this.setState({ hasError: false, error: null })} style={{ padding: '8px 20px', borderRadius: '6px', background: 'var(--accent, #7c6dff)', color: '#fff', fontWeight: 600, border: 'none', cursor: 'pointer' }}>Try Again</button>
+            <button onClick={() => window.location.reload()} style={{ padding: '8px 20px', borderRadius: '6px', background: 'var(--bg-3, #333)', color: 'var(--tx-1, #e8e8e8)', fontWeight: 600, border: '1px solid var(--bd-1, #444)', cursor: 'pointer' }}>Hard Reload</button>
+          </div>
         </div>
       );
     }
@@ -45,7 +72,11 @@ type SettingsTab = 'general' | 'appearance' | 'hotkeys';
 const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { vaultPath } = useStore();
   const [tab, setTab] = useState<SettingsTab>('general');
-  const [stats, setStats] = useState({ app: '—', ollama: '—' });
+  const [stats, setStats] = useState({ app: '—', webview: '—', ollama: '—' });
+
+  const formatMb = (mb: number) => (
+    mb > 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb + ' MB'
+  );
 
   useEffect(() => {
     const fetch = async () => {
@@ -53,8 +84,9 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         const { invoke } = await import('@tauri-apps/api/core');
         const res: any = await invoke('get_system_stats');
         setStats({ 
-          app: res.app_mb > 1024 ? (res.app_mb / 1024).toFixed(1) + ' GB' : res.app_mb + ' MB',
-          ollama: res.ollama_mb > 1024 ? (res.ollama_mb / 1024).toFixed(1) + ' GB' : res.ollama_mb + ' MB'
+          app: formatMb(res.app_mb ?? 0),
+          webview: formatMb(res.webview_mb ?? 0),
+          ollama: formatMb(res.ollama_mb ?? 0)
         });
       } catch {}
     };
@@ -123,14 +155,15 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 </label>
               </div>
 
-              <div style={{ marginTop: '24px', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--bd-1)' }}>
-                <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: '12px', letterSpacing: '0.05em', fontWeight: 600 }}>System Resources</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <ResourceStat label="App + Webview" value={stats.app} />
+                <div style={{ marginTop: '24px', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--bd-1)' }}>
+                  <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: '12px', letterSpacing: '0.05em', fontWeight: 600 }}>System Resources</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                  <ResourceStat label="App Process" value={stats.app} />
+                  <ResourceStat label="Nopes WebView" value={stats.webview} />
                   <ResourceStat label="Ollama Service" value={stats.ollama} />
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--tx-3)', marginTop: '12px', fontStyle: 'italic' }}>
-                  * AI Worker automatically kills itself after 5 mins of inactivity.
+                  * WebView stat is scoped to Nopes-owned WebKit cache users.
                 </div>
               </div>
             </>

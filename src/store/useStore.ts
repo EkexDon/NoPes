@@ -81,10 +81,19 @@ export interface MediaItem {
   src: string;
 }
 
-interface GraphData {
+export interface GraphData {
   nodes: { id: string; label: string; tags?: string[] }[];
   links: { source: string; target: string }[];
 }
+
+export interface AiIndexEntry {
+  path: string;
+  label: string;
+  vec: Float32Array;
+}
+
+const MAX_AI_INDEX_ENTRIES = 10000;
+const AI_INDEX_PRUNE_RATIO = 0.2;
 
 interface AppState {
   vaultPath: string | null;
@@ -96,6 +105,7 @@ interface AppState {
   tabs: Tab[];
   activeTab: string | null;
   tabContents: Record<string, string>; // path -> content
+  tabContentsSize: () => { entries: number; bytes: number };
 
   // Rich Media Assets awaiting insertion into the editor
   pendingAssetInserts: string[];
@@ -122,7 +132,7 @@ interface AppState {
 
   // AI Toggle & Semantic Search
   isAiEnabled: boolean;
-  aiIndex: { path: string; label: string; vec: Float32Array }[];
+  aiIndex: AiIndexEntry[];
   aiApiKey: string | null;
 
   // ── Actions ──
@@ -154,6 +164,7 @@ interface AppState {
   setAiApiKey: (key: string) => void;
   setAiEnabled: (v: boolean) => void;
   setAutoSaveEnabled: (v: boolean) => void;
+  clearAiIndex: () => void;
 
   // File conversion/import
   importFiles: (paths: string[]) => Promise<void>;
@@ -189,6 +200,151 @@ export function extractTags(text: string): string[] {
   return out;
 }
 
+/** Enforces LRU on tabContents to prevent unbounded memory growth (L-05) */
+export function enforceTabContentsLRU(
+  contents: Record<string, string>,
+  activePaths: string[],
+  maxEntries = 64,
+  maxBytes = 32 * 1024 * 1024
+): Record<string, string> {
+  const keys = Object.keys(contents);
+  const totalBytes = () => keys.reduce((acc, k) => acc + (contents[k]?.length || 0), 0);
+
+  if (keys.length <= maxEntries && totalBytes() <= maxBytes) return contents;
+
+  const next = { ...contents };
+  let currentEntries = keys.length;
+  let currentBytes = totalBytes();
+
+  // Evict oldest first (Object.keys insertion order)
+  for (const key of keys) {
+    if (currentEntries <= maxEntries && currentBytes <= maxBytes) break;
+    if (activePaths.includes(key)) continue; // Never evict active tabs
+    if (currentEntries <= 1) break; // Always retain at least one entry (the most recent)
+
+    if (next[key]) {
+      currentBytes -= next[key].length;
+      delete next[key];
+      currentEntries--;
+    }
+  }
+  return next;
+}
+
+function deriveLabelFromPath(path: string): string {
+  return path.split(/[\\/]/).pop()?.replace(/\.md$/, '') ?? 'Note';
+}
+
+function normalizeAiVec(vec: unknown): Float32Array | null {
+  if (vec instanceof Float32Array) return vec;
+  if (!Array.isArray(vec)) return null;
+  if (!vec.length) return null;
+  if (vec.length > 4096) return null; // defensive upper bound
+  const nums: number[] = [];
+  for (const v of vec) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+    nums.push(v);
+  }
+  return new Float32Array(nums);
+}
+
+export function sanitizeAiIndex(raw: unknown, maxEntries = MAX_AI_INDEX_ENTRIES): AiIndexEntry[] {
+  if (!Array.isArray(raw) || maxEntries <= 0) return [];
+  const seen = new Set<string>();
+  const out: AiIndexEntry[] = [];
+
+  // Iterate from end to keep newest entries first when deduping.
+  for (let i = raw.length - 1; i >= 0; i--) {
+    const item = raw[i] as Partial<AiIndexEntry> | null | undefined;
+    const path = typeof item?.path === 'string' ? item.path : '';
+    if (!path || seen.has(path)) continue;
+    const vec = normalizeAiVec(item?.vec);
+    if (!vec) continue;
+    seen.add(path);
+    out.push({
+      path,
+      label: typeof item?.label === 'string' && item.label ? item.label : deriveLabelFromPath(path),
+      vec,
+    });
+    if (out.length >= maxEntries) break;
+  }
+
+  return out.reverse();
+}
+
+export function mergeAiIndex(
+  existing: AiIndexEntry[],
+  incoming: AiIndexEntry[],
+  maxEntries = MAX_AI_INDEX_ENTRIES,
+  pruneRatio = AI_INDEX_PRUNE_RATIO
+): { index: AiIndexEntry[]; pruned: boolean } {
+  const map = new Map<string, AiIndexEntry>();
+  const push = (item: AiIndexEntry) => {
+    if (map.has(item.path)) map.delete(item.path);
+    map.set(item.path, item);
+  };
+
+  existing.forEach(push);
+  incoming.forEach(push);
+
+  let merged = Array.from(map.values());
+  let pruned = false;
+  if (merged.length > maxEntries) {
+    pruned = true;
+    const pruneCount = Math.max(1, Math.floor(merged.length * pruneRatio));
+    merged = merged.slice(pruneCount);
+    if (merged.length > maxEntries) merged = merged.slice(-maxEntries);
+  }
+  return { index: merged, pruned };
+}
+
+export function applyGraphOverride(
+  currentGraph: GraphData,
+  allFiles: FileInfo[],
+  override: { path: string; text: string }
+): GraphData {
+  const endpointId = (v: unknown): string => {
+    if (typeof v === 'string') return v;
+    if (v && typeof v === 'object' && 'id' in (v as Record<string, unknown>)) {
+      const id = (v as Record<string, unknown>).id;
+      return typeof id === 'string' ? id : '';
+    }
+    return '';
+  };
+  const validPaths = new Set(allFiles.filter(f => !f.is_dir).map(f => f.path));
+  const byLabel = new Map(
+    allFiles
+      .filter(f => !f.is_dir)
+      .map(f => [f.name.replace(/\.md$/, '').toLowerCase(), f.path] as const)
+  );
+
+  const links = currentGraph.links
+    .map(link => ({ source: endpointId((link as any).source), target: endpointId((link as any).target) }))
+    .filter(link => link.source && link.target)
+    .filter(link => link.source !== override.path)
+    .filter(link => validPaths.has(link.source) && validPaths.has(link.target));
+
+  for (const target of extractWikilinks(override.text)) {
+    const targetPath = byLabel.get(target.toLowerCase());
+    if (targetPath && targetPath !== override.path) {
+      links.push({ source: override.path, target: targetPath });
+    }
+  }
+
+  const nodes = currentGraph.nodes.filter(node => node.id !== override.path && validPaths.has(node.id));
+  if (validPaths.has(override.path)) {
+    const file = allFiles.find(f => f.path === override.path);
+    nodes.push({
+      id: override.path,
+      label: file?.name.replace(/\.md$/, '') ?? deriveLabelFromPath(override.path),
+      tags: extractTags(override.text),
+    });
+  }
+
+  return { nodes, links };
+}
+
+
 export const useStore = create<AppState>((set, get) => ({
   vaultPath: localStorage.getItem('nopes_vault_path'),
   files: [],
@@ -198,6 +354,14 @@ export const useStore = create<AppState>((set, get) => ({
   tabs: [],
   activeTab: null,
   tabContents: {},
+  tabContentsSize: () => {
+    const { tabContents } = get();
+    const entries = Object.keys(tabContents);
+    return {
+      entries: entries.length,
+      bytes: entries.reduce((acc, k) => acc + (tabContents[k]?.length || 0), 0)
+    };
+  },
   pendingAssetInserts: [],
   media: [],
 
@@ -228,6 +392,7 @@ export const useStore = create<AppState>((set, get) => ({
   })),
 
   setVaultPath: async (path) => {
+    get().clearAiIndex(); // Purge prior vault's embeddings (L-06)
     set({ vaultPath: path });
     localStorage.setItem('nopes_vault_path', path);
     await get().loadFiles();
@@ -312,12 +477,22 @@ export const useStore = create<AppState>((set, get) => ({
     const label = name.replace(/\.md$/, '') || 'Untitled';
     const alreadyOpen = tabs.some(t => t.path === path);
 
-    set(state => ({
-      tabs: alreadyOpen ? state.tabs : [...state.tabs, { path, label }],
-      tabContents: { ...state.tabContents, [path]: content! },
-      activeTab: path,
-      viewMode: 'editor',
-    }));
+    set(state => {
+      const activePaths = state.tabs.map(t => t.path);
+      if (path && !activePaths.includes(path)) activePaths.push(path);
+      
+      const newContents = enforceTabContentsLRU(
+        { ...state.tabContents, [path]: content! },
+        activePaths
+      );
+
+      return {
+        tabs: alreadyOpen ? state.tabs : [...state.tabs, { path, label }],
+        tabContents: newContents,
+        activeTab: path,
+        viewMode: 'editor',
+      };
+    });
 
     await get().loadGraphData();
   },
@@ -347,7 +522,14 @@ export const useStore = create<AppState>((set, get) => ({
   saveFile: async (path, content) => {
     try {
       await writeTextFile(path, content);
-      set(state => ({ tabContents: { ...state.tabContents, [path]: content } }));
+      set(state => {
+        const activePaths = state.tabs.map(t => t.path);
+        const newContents = enforceTabContentsLRU(
+          { ...state.tabContents, [path]: content },
+          activePaths
+        );
+        return { tabContents: newContents };
+      });
       await get().loadGraphData({ path, text: content });
     } catch (e) { console.error('saveFile error:', e); }
   },
@@ -444,7 +626,11 @@ export const useStore = create<AppState>((set, get) => ({
         }
       }
       
-      set({ tabs: newTabs, activeTab: newActive, tabContents: newTabContents });
+      // Write changes to all modified files and update state
+      const activePaths = tabs.map(t => t.path);
+      const finalContents = enforceTabContentsLRU(newTabContents, activePaths);
+      
+      set({ tabs: newTabs, activeTab: newActive, tabContents: finalContents });
       
       await get().loadFiles();
       await get().loadGraphData();
@@ -469,21 +655,30 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   loadGraphData: async (override?) => {
-    const { allFiles, viewMode } = get();
-    // Optimization: Only run full graph scan if we are actually in graph mode or it's an override (save)
-    if (!allFiles.length || (viewMode !== 'graph' && !override)) return;
-    
+    const { allFiles, viewMode, graphData } = get();
+    if (!allFiles.length) return;
+
+    // In editor mode, avoid full-vault rescans on every autosave.
+    // If graph was previously built, patch just the changed note.
+    if (override && viewMode !== 'graph' && graphData.nodes.length > 0) {
+      set({ graphData: applyGraphOverride(graphData, allFiles, override) });
+      return;
+    }
+
+    // If not in graph view and no prior graph cache exists, skip.
+    if (viewMode !== 'graph' && !override) return;
+
     try {
       const nodes: { id: string; label: string; tags: string[] }[] = [];
       const links: { source: string; target: string }[] = [];
       const byLabel = new Map(allFiles.map(f => [f.name.replace(/\.md$/, '').toLowerCase(), f.path]));
+      const { tabContents } = get();
 
       for (const file of allFiles) {
         let text = '';
         if (override && file.path === override.path) {
           text = override.text;
         } else {
-          const { tabContents } = get();
           text = tabContents[file.path] ?? '';
           if (!text) {
             // Only read from disk if absolutely necessary (this is the expensive part)
@@ -574,17 +769,28 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       toast.loading('Building AI index (this may take a minute)...', { id: 'ai-index' });
       const results = await AIService.embedDocs(docsToEmbed);
-      const newIndex = results.map(r => ({
+      
+      const newItems = results.map(r => ({
         path: r.path,
         label: r.path.split(/[\\/]/).pop()?.replace(/\.md$/, '') ?? 'Note',
         vec: r.vec
       }));
-      set({ aiIndex: newIndex });
+
+      let wasPruned = false;
+      set(state => {
+        const merged = mergeAiIndex(state.aiIndex, sanitizeAiIndex(newItems, MAX_AI_INDEX_ENTRIES));
+        wasPruned = merged.pruned;
+        return { aiIndex: merged.index };
+      });
+      if (wasPruned) {
+        console.warn('[AI] Embedding cap reached. Pruning oldest entries.');
+      }
       
+      const { aiIndex } = get();
       // Save to cache
       const cachePath = await join(vaultPath, '.nopes_embeddings.json');
       // Convert Float32Array to regular array for JSON serialization
-      const serializableIndex = newIndex.map(item => ({
+      const serializableIndex = aiIndex.map(item => ({
         ...item,
         vec: Array.from(item.vec)
       }));
@@ -605,11 +811,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (await exists(cachePath)) {
       try {
         const content = await readTextFile(cachePath);
-        const data = JSON.parse(content);
-        const restoredIndex = data.map((item: any) => ({
-          ...item,
-          vec: new Float32Array(item.vec)
-        }));
+        const data = JSON.parse(content) as unknown;
+        const restoredIndex = sanitizeAiIndex(data, MAX_AI_INDEX_ENTRIES);
         set({ aiIndex: restoredIndex });
         console.log('[Store] AI index restored from cache');
       } catch (e) {
@@ -778,5 +981,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   testToast: () => {
     toast.success('Notification System OK! ✅', { duration: 10000 });
+  },
+
+  clearAiIndex: () => {
+    // Reassign to empty to allow GC of large Float32Arrays (L-06)
+    set({ aiIndex: [] });
   },
 }));
