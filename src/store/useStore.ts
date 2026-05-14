@@ -807,7 +807,7 @@ This is a canvas board.
 
   moveItem: async (sourcePath: string, targetDir: string) => {
     try {
-      const { rename } = await import('@tauri-apps/plugin-fs');
+      const { rename, exists } = await import('@tauri-apps/plugin-fs');
       const { basename, join } = await import('@tauri-apps/api/path');
 
       const fileName = await basename(sourcePath);
@@ -815,6 +815,18 @@ This is a canvas board.
 
       // Don't move if already in target
       if (sourcePath === newPath) return;
+
+      // Check if target already exists
+      const targetExists = await exists(newPath);
+      if (targetExists) {
+        const shouldOverwrite = window.confirm(
+          `A file named "${fileName}" already exists in this folder.\n\nDo you want to overwrite it?\n\nWarning: This will replace the existing file.`
+        );
+        if (!shouldOverwrite) {
+          toast.error('Move cancelled');
+          return;
+        }
+      }
 
       await rename(sourcePath, newPath);
 
