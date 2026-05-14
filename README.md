@@ -1,4 +1,4 @@
-# NoPes — The High-Performance Second Brain
+# NoPes v2.0 — The High-Performance Second Brain
 
 ![NoPes Overview](assets/banner.jpg)
 
@@ -6,9 +6,32 @@
 
 **NoPes** is a professional-grade, local-first knowledge management tool designed for speed, privacy, and visual thinking. Built with **Tauri 2.0** and **React**, it combines the power of structured markdown with the freedom of infinite-canvas whiteboarding and local AI.
 
+> **v2.0 Release**: Home Dashboard, Context Menus, Breadcrumb Navigation, and Smart File Type Detection.
+
 ---
 
 ## 🔥 Pro Features
+
+### 🏠 Home Dashboard (v2.0)
+Your command center for everything. A Notion-inspired home view with:
+- **Visual Cards**: All notes, Canvas, and Kanban boards with custom icons
+- **Smart Filters**: Quickly switch between All, Notes, Canvas, Kanban, or Folders
+- **Favorites & Recent**: Pin important items, see what you worked on last
+- **Icon Picker**: Personalize notes with emojis or Lucide icons
+- **Quick Create**: One-click creation of new Notes, Canvas boards, or Kanban boards
+- **Context Menus**: Right-click any item for instant actions (delete, duplicate, reveal in finder)
+
+### 🧭 Breadcrumb Navigation (v2.0)
+Never lose your way. Clear navigation showing:
+- **Home** → **Vault** → **Folder** → **File** hierarchy
+- **Smart Icons**: Canvas 🎨, Kanban 📊, Graph 🔗 indicators
+- **Clickable Path**: Jump back to any level instantly
+
+### 🖱️ Context Menu System (v2.0)
+Right-click anywhere for powerful actions:
+- **Home Cards**: Open, Favorite, Change Icon, Reveal in Finder, Duplicate, Delete
+- **Sidebar Files**: Full file operations with confirmation dialogs
+- **Quick Access**: No more hunting through menus
 
 ### 🗂️ Kanban Board
 Turn any markdown note into a visual task board.
@@ -26,6 +49,8 @@ Focus on what matters in long documents.
 
 ### 🎨 Infinite Canvas (Whiteboard)
 Think visually. **NoPes Canvas** integrates [Excalidraw](https://excalidraw.com/) directly into your vault.
+- **Smart Detection**: Canvas files (`<!-- CANVAS -->`) open automatically in Canvas view
+- **Standalone Files**: Create dedicated `.md` canvas files with `New → Canvas`
 - **Link to Notes**: Connect canvas elements to your markdown notes using `[[WikiLinks]]`. Clicking a linked shape instantly opens the relevant note.
 - **Auto-Save**: Seamless, debounced persistence to `.excalidraw` files within your vault.
 - **Visual Mapping**: Use it for mind maps, architecture diagrams, or freehand brainstorming.

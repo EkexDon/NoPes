@@ -47,6 +47,7 @@
     "@types/katex": "^0.16.8",
     "d3-force": "^3.0.0",
     "framer-motion": "^12.38.0",
+    "fuse.js": "^7.3.0",
     "html2pdf.js": "^0.14.0",
     "katex": "^0.16.45",
     "kbar": "^0.1.0-beta.48",

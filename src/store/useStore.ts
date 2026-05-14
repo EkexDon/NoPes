@@ -92,6 +92,26 @@ export interface AiIndexEntry {
   vec: Float32Array;
 }
 
+export interface NoteTemplate {
+  id: string;
+  name: string;
+  content: string;
+  category: string;
+  createdAt: number;
+}
+
+export interface FileMetadata {
+  icon?: string;
+  iconType: 'emoji' | 'lucide' | 'image';
+  color?: string;
+  description?: string;
+  lastOpened?: number;
+  lastModified?: number;
+  itemType: 'note' | 'canvas' | 'kanban' | 'folder';
+}
+
+export type ViewMode = 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban' | 'home';
+
 const MAX_AI_INDEX_ENTRIES = 10000;
 const AI_INDEX_PRUNE_RATIO = 0.2;
 
@@ -116,15 +136,19 @@ interface AppState {
   isRefreshing: boolean;
   isAutoSaveEnabled: boolean;
   graphData: GraphData;
-  viewMode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban';
+  viewMode: ViewMode;
 
   // Split View Multi-Pane Support
   isSplitView: boolean;
   rightActiveTab: string | null;
-  rightViewMode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban';
+  rightViewMode: ViewMode;
+
+  // File Metadata for Home Dashboard
+  fileMetadata: Record<string, FileMetadata>;
+  recentFiles: string[];
   setSplitView: (isSplit: boolean) => void;
   setRightActiveTab: (path: string | null) => void;
-  setRightViewMode: (mode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban') => void;
+  setRightViewMode: (mode: ViewMode) => void;
   toggleSplitView: () => void;
 
   // Journal / Heatmap
@@ -134,6 +158,30 @@ interface AppState {
   isAiEnabled: boolean;
   aiIndex: AiIndexEntry[];
   aiApiKey: string | null;
+
+  // Fun Features
+  zenMode: boolean;
+  achievements: string[];
+  setZenMode: (v: boolean) => void;
+  unlockAchievement: (id: string, title: string) => void;
+
+  // Templates
+  templates: NoteTemplate[];
+  saveTemplate: (template: Omit<NoteTemplate, 'id' | 'createdAt'>) => void;
+  deleteTemplate: (id: string) => void;
+  createFileFromTemplate: (name: string, templateId: string, folderPath?: string) => Promise<void>;
+
+  // Full-text search index
+  searchIndex: Map<string, string>; // path -> content for search
+  buildSearchIndex: () => Promise<void>;
+
+  // File Metadata Actions
+  setFileIcon: (path: string, icon: string, type: 'emoji' | 'lucide' | 'image') => void;
+  setFileMetadata: (path: string, metadata: Partial<FileMetadata>) => void;
+  updateRecentFile: (path: string) => void;
+  loadFileMetadata: () => Promise<void>;
+  saveFileMetadata: () => Promise<void>;
+  detectFileType: (path: string, content?: string) => FileMetadata['itemType'];
 
   // ── Actions ──
   setVaultPath: (path: string) => Promise<void>;
@@ -150,12 +198,21 @@ interface AppState {
   renameItem: (oldPath: string, newName: string) => Promise<void>;
   toggleFavorite: (path: string) => void;
 
+  // Canvas & Kanban creation
+  createCanvasFile: (name: string, folderPath?: string) => Promise<void>;
+  createKanbanFile: (name: string, folderPath?: string) => Promise<void>;
+
+  // Context Menu Helpers
+  revealInFinder: (path: string) => Promise<void>;
+  copyToClipboard: (text: string) => Promise<void>;
+  duplicateFile: (path: string) => Promise<void>;
+
   setPendingAssetInserts: (assets: string[]) => void;
   addMedia: (item: MediaItem) => void;
 
   loadGraphData: (override?: { path: string; text: string }) => Promise<void>;
   setSidebarOpen: (v: boolean) => void;
-  setViewMode: (mode: 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban') => void;
+  setViewMode: (mode: ViewMode) => void;
   
   createNodeFromGraph: () => Promise<void>;
   computeJournalStats: () => Promise<void>;
@@ -378,6 +435,27 @@ export const useStore = create<AppState>((set, get) => ({
   aiIndex: [],
   aiApiKey: localStorage.getItem('nopes_ai_key'),
 
+  zenMode: false,
+  achievements: JSON.parse(localStorage.getItem('nopes_achievements') || '[]'),
+  templates: JSON.parse(localStorage.getItem('nopes_templates') || '[]'),
+  searchIndex: new Map(),
+  fileMetadata: {},
+  recentFiles: JSON.parse(localStorage.getItem('nopes_recent_files') || '[]'),
+
+  setZenMode: (v) => set({ zenMode: v }),
+  unlockAchievement: (id, title) => {
+    const { achievements } = get();
+    if (!achievements.includes(id)) {
+      const next = [...achievements, id];
+      set({ achievements: next });
+      localStorage.setItem('nopes_achievements', JSON.stringify(next));
+      toast.success(`🏆 Achievement Unlocked: ${title}`, {
+        duration: 4000,
+        style: { background: 'var(--accent)', color: '#fff' }
+      });
+    }
+  },
+
   activeContent: () => {
     const { activeTab, tabContents } = get();
     return activeTab ? (tabContents[activeTab] ?? '') : '';
@@ -477,6 +555,23 @@ export const useStore = create<AppState>((set, get) => ({
     const label = name.replace(/\.md$/, '') || 'Untitled';
     const alreadyOpen = tabs.some(t => t.path === path);
 
+    // Detect view mode from content markers
+    let targetViewMode: ViewMode = 'editor';
+    const contentToCheck = content || '';
+    
+    // More robust check - look for markers anywhere in content
+    if (contentToCheck.includes('<!-- CANVAS -->') || 
+        contentToCheck.includes('data-canvas="true"') ||
+        contentToCheck.toLowerCase().includes('canvas')) {
+      targetViewMode = 'canvas';
+      console.log(`[openFile] Detected Canvas file: ${path}`);
+    } else if (contentToCheck.includes('<!-- KANBAN -->') || 
+               contentToCheck.includes('data-kanban="true"') ||
+               contentToCheck.toLowerCase().includes('kanban')) {
+      targetViewMode = 'kanban';
+      console.log(`[openFile] Detected Kanban file: ${path}`);
+    }
+
     set(state => {
       const activePaths = state.tabs.map(t => t.path);
       if (path && !activePaths.includes(path)) activePaths.push(path);
@@ -490,10 +585,13 @@ export const useStore = create<AppState>((set, get) => ({
         tabs: alreadyOpen ? state.tabs : [...state.tabs, { path, label }],
         tabContents: newContents,
         activeTab: path,
-        viewMode: 'editor',
+        viewMode: targetViewMode,
       };
     });
 
+    // Update recent files list
+    get().updateRecentFile(path);
+    
     await get().loadGraphData();
   },
 
@@ -531,7 +629,10 @@ export const useStore = create<AppState>((set, get) => ({
         return { tabContents: newContents };
       });
       await get().loadGraphData({ path, text: content });
-    } catch (e) { console.error('saveFile error:', e); }
+    } catch (e: any) { 
+      console.error('saveFile error:', e); 
+      toast.error('Save failed: ' + (e.message || e));
+    }
   },
 
   createFile: async (name, folderPath) => {
@@ -544,7 +645,163 @@ export const useStore = create<AppState>((set, get) => ({
       await writeTextFile(newPath, '# ' + name);
       await get().loadFiles();
       await get().openFile(newPath);
+      const noteCount = get().allFiles.filter(f => !f.is_dir).length;
+      get().unlockAchievement('first-note', 'First Note');
+      if (noteCount >= 10) get().unlockAchievement('architect-10', 'Architect');
+      if (noteCount >= 50) get().unlockAchievement('librarian-50', 'Librarian');
     } catch (e) { console.error('createFile error:', e); }
+  },
+
+  saveTemplate: (template) => {
+    const { templates } = get();
+    const newTemplate: NoteTemplate = {
+      ...template,
+      id: crypto.randomUUID(),
+      createdAt: Date.now(),
+    };
+    const next = [...templates, newTemplate];
+    set({ templates: next });
+    localStorage.setItem('nopes_templates', JSON.stringify(next));
+    toast.success(`Template "${template.name}" saved`);
+  },
+
+  deleteTemplate: (id) => {
+    const { templates } = get();
+    const next = templates.filter(t => t.id !== id);
+    set({ templates: next });
+    localStorage.setItem('nopes_templates', JSON.stringify(next));
+    toast.success('Template deleted');
+  },
+
+  createFileFromTemplate: async (name, templateId, folderPath) => {
+    const { vaultPath, templates } = get();
+    const base = folderPath || vaultPath;
+    if (!base) return;
+    const template = templates.find(t => t.id === templateId);
+    if (!template) {
+      toast.error('Template not found');
+      return;
+    }
+    try {
+      const fileName = name.endsWith('.md') ? name : `${name}.md`;
+      const newPath = await join(base, fileName);
+      const content = template.content.replace(/\$\{name\}/g, name.replace(/\.md$/, ''));
+      await writeTextFile(newPath, content);
+      await get().loadFiles();
+      await get().openFile(newPath);
+      const noteCount = get().allFiles.filter(f => !f.is_dir).length;
+      get().unlockAchievement('first-note', 'First Note');
+      if (noteCount >= 10) get().unlockAchievement('architect-10', 'Architect');
+      if (noteCount >= 50) get().unlockAchievement('librarian-50', 'Librarian');
+      toast.success(`Created from template "${template.name}"`);
+    } catch (e) { console.error('createFileFromTemplate error:', e); }
+  },
+
+  createCanvasFile: async (name, folderPath) => {
+    const { vaultPath, setFileMetadata } = get();
+    const base = folderPath || vaultPath;
+    if (!base) return;
+    try {
+      const fileName = name.endsWith('.md') ? name : `${name}.md`;
+      const newPath = await join(base, fileName);
+      const content = `<!-- CANVAS -->
+
+# ${name.replace(/\.md$/, '')}
+
+This is a canvas board.
+`;
+      await writeTextFile(newPath, content);
+      
+      // Set metadata for canvas type
+      setFileMetadata(newPath, {
+        itemType: 'canvas',
+        iconType: 'emoji',
+        icon: '🎨'
+      });
+      
+      await get().loadFiles();
+      await get().openFile(newPath);
+      get().setViewMode('canvas');
+      toast.success('Canvas created');
+    } catch (e) { console.error('createCanvasFile error:', e); }
+  },
+
+  createKanbanFile: async (name, folderPath) => {
+    const { vaultPath, setFileMetadata } = get();
+    const base = folderPath || vaultPath;
+    if (!base) return;
+    try {
+      const fileName = name.endsWith('.md') ? name : `${name}.md`;
+      const newPath = await join(base, fileName);
+      const content = `<!-- KANBAN -->
+
+# ${name.replace(/\.md$/, '')}
+
+## 📋 To Do
+- [ ] Task 1
+- [ ] Task 2
+
+## 🔄 In Progress
+
+## ✅ Done
+- [x] Started project
+`;
+      await writeTextFile(newPath, content);
+      
+      // Set metadata for kanban type
+      setFileMetadata(newPath, {
+        itemType: 'kanban',
+        iconType: 'emoji',
+        icon: '📊'
+      });
+      
+      await get().loadFiles();
+      await get().openFile(newPath);
+      get().setViewMode('kanban');
+      toast.success('Kanban board created');
+    } catch (e) { console.error('createKanbanFile error:', e); }
+  },
+
+  revealInFinder: async (path) => {
+    try {
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      await openPath(await dirname(path));
+      toast.success('Opened in Finder');
+    } catch (e: any) {
+      console.error('revealInFinder error:', e);
+      toast.error(`Could not open: ${e.message || e}`);
+    }
+  },
+
+  copyToClipboard: async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Copied to clipboard');
+    } catch (e: any) {
+      console.error('copyToClipboard error:', e);
+      toast.error('Failed to copy');
+    }
+  },
+
+  duplicateFile: async (path) => {
+    try {
+      const { readTextFile, writeTextFile } = await import('@tauri-apps/plugin-fs');
+      const { basename, join } = await import('@tauri-apps/api/path');
+      
+      const content = await readTextFile(path);
+      const baseName = await basename(path);
+      const nameWithoutExt = baseName.replace(/\.md$/, '');
+      const newName = `${nameWithoutExt} Copy.md`;
+      const dir = path.substring(0, path.lastIndexOf('/') + 1);
+      const newPath = await join(dir, newName);
+      
+      await writeTextFile(newPath, content);
+      await get().loadFiles();
+      toast.success('File duplicated');
+    } catch (e: any) {
+      console.error('duplicateFile error:', e);
+      toast.error(`Duplicate failed: ${e.message || e}`);
+    }
   },
 
   createFolder: async (name, parentPath) => {
@@ -575,27 +832,32 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       const dir = await dirname(oldPath);
       const isMd = oldPath.endsWith('.md');
-      let finalName = newName;
-      if (isMd && !finalName.endsWith('.md')) finalName += '.md';
-      
+      let finalName = newName.endsWith('.md') || !isMd ? newName : `${newName}.md`;
       const newPath = await join(dir, finalName);
       if (newPath === oldPath) return; // No change
+      
+      // Get current state BEFORE rename
+      const { tabs, tabContents, activeTab, allFiles } = get();
+      
+      // DEBUG: Check if content exists before rename
+      const oldContent = tabContents[oldPath];
+      console.log(`[renameItem] oldPath: ${oldPath}, content exists: ${oldContent !== undefined}, content length: ${oldContent?.length ?? 0}`);
       
       await rename(oldPath, newPath);
       
       const oldBase = oldPath.split(/[\\/]/).pop()?.replace(/\.md$/, '') ?? '';
       const newBase = finalName.replace(/\.md$/, '');
       
-      const { tabs, tabContents, activeTab, allFiles } = get();
-      
       // 1. Keep the tab open and seamlessly transition it
       const newTabs = tabs.map(t => t.path === oldPath ? { path: newPath, label: newBase } : t);
       const newActive = activeTab === oldPath ? newPath : activeTab;
       
       const newTabContents = { ...tabContents };
+      console.log(`[renameItem] Copying content from ${oldPath} to ${newPath}, exists: ${newTabContents[oldPath] !== undefined}`);
       if (newTabContents[oldPath] !== undefined) {
           newTabContents[newPath] = newTabContents[oldPath];
           delete newTabContents[oldPath];
+          console.log(`[renameItem] Content copied, new length: ${newTabContents[newPath]?.length}`);
       }
       
       // 2. Global WikiLink refactoring for the renamed doc!
@@ -986,5 +1248,123 @@ export const useStore = create<AppState>((set, get) => ({
   clearAiIndex: () => {
     // Reassign to empty to allow GC of large Float32Arrays (L-06)
     set({ aiIndex: [] });
+  },
+
+  buildSearchIndex: async () => {
+    const { allFiles, tabContents } = get();
+    const index = new Map<string, string>();
+    
+    for (const f of allFiles) {
+      if (f.is_dir || !f.name.endsWith('.md')) continue;
+      let text = tabContents[f.path];
+      if (!text) {
+        try { text = await readTextFile(f.path); } catch { continue; }
+      }
+      index.set(f.path, text);
+    }
+    
+    set({ searchIndex: index });
+    console.log('[Store] Full-text search index built:', index.size, 'notes');
+  },
+
+  // File Metadata Management
+  detectFileType: (path: string, content?: string): FileMetadata['itemType'] => {
+    if (!path) return 'note';
+    
+    // Check for canvas marker in content
+    if (content?.includes('<!-- CANVAS -->') || content?.includes('data-canvas="true"')) {
+      return 'canvas';
+    }
+    
+    // Check for kanban marker in content  
+    if (content?.includes('<!-- KANBAN -->') || content?.includes('data-kanban="true"')) {
+      return 'kanban';
+    }
+    
+    // Check file extension
+    if (path.toLowerCase().endsWith('.md')) {
+      return 'note';
+    }
+    
+    return 'note';
+  },
+
+  setFileIcon: (path: string, icon: string, type: 'emoji' | 'lucide' | 'image') => {
+    const { fileMetadata, detectFileType } = get();
+    const existing = fileMetadata[path] || {
+      iconType: type,
+      itemType: detectFileType(path)
+    };
+    
+    const next = {
+      ...fileMetadata,
+      [path]: {
+        ...existing,
+        icon,
+        iconType: type,
+        lastModified: Date.now()
+      }
+    };
+    
+    set({ fileMetadata: next });
+    localStorage.setItem('nopes_file_metadata', JSON.stringify(next));
+    toast.success('Icon updated');
+  },
+
+  setFileMetadata: (path: string, metadata: Partial<FileMetadata>) => {
+    const { fileMetadata } = get();
+    const existing = fileMetadata[path] || { iconType: 'emoji', itemType: 'note' };
+    
+    const next = {
+      ...fileMetadata,
+      [path]: {
+        ...existing,
+        ...metadata,
+        lastModified: Date.now()
+      }
+    };
+    
+    set({ fileMetadata: next });
+    localStorage.setItem('nopes_file_metadata', JSON.stringify(next));
+  },
+
+  updateRecentFile: (path: string) => {
+    const { recentFiles } = get();
+    const next = [path, ...recentFiles.filter(p => p !== path)].slice(0, 10);
+    set({ recentFiles: next });
+    localStorage.setItem('nopes_recent_files', JSON.stringify(next));
+    
+    // Also update lastOpened in metadata
+    const { fileMetadata, detectFileType, setFileMetadata } = get();
+    if (!fileMetadata[path]) {
+      setFileMetadata(path, {
+        itemType: detectFileType(path),
+        iconType: 'emoji',
+        lastOpened: Date.now()
+      });
+    } else {
+      setFileMetadata(path, { lastOpened: Date.now() });
+    }
+  },
+
+  loadFileMetadata: async () => {
+    try {
+      const stored = localStorage.getItem('nopes_file_metadata');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        set({ fileMetadata: parsed });
+      }
+    } catch (e) {
+      console.error('Failed to load file metadata:', e);
+    }
+  },
+
+  saveFileMetadata: async () => {
+    const { fileMetadata } = get();
+    try {
+      localStorage.setItem('nopes_file_metadata', JSON.stringify(fileMetadata));
+    } catch (e) {
+      console.error('Failed to save file metadata:', e);
+    }
   },
 }));

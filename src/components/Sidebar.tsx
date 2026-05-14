@@ -1,13 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import toast from 'react-hot-toast';
 import {
   FileText, FolderOpen, ChevronRight, ChevronDown,
-  Plus, FolderPlus, Star, X, RotateCw, Edit3, Trash2
+  Plus, FolderPlus, Star, X, RotateCw, Edit3, Trash2,
+  LayoutTemplate, Save, Copy, ExternalLink, Heart, Layout, Kanban
 } from 'lucide-react';
 import { openPath as openExternal } from '@tauri-apps/plugin-opener';
 import { motion, AnimatePresence } from 'framer-motion';
-import { GraphView } from './GraphView';
+import { ContextMenu } from './ContextMenu';
+import { useContextMenu } from '../hooks/useContextMenu';
+
+import nopi00 from '../assets/nopi/pet_00.png';
+import nopi05 from '../assets/nopi/pet_05.png';
+import nopi09 from '../assets/nopi/pet_09.png';
+import nopi14 from '../assets/nopi/pet_14.png';
+import nopi28 from '../assets/nopi/pet_28.png';
+import nopi32 from '../assets/nopi/pet_32.png';
+import nopi42 from '../assets/nopi/pet_42.png';
+import nopi46 from '../assets/nopi/pet_46.png';
 
 /* ─── Types ──────────────────────────────────────────────── */
 interface FileInfo {
@@ -64,7 +75,11 @@ const FileRow: React.FC<{ file: FileInfo; depth: number }> = ({ file, depth }) =
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm(`Are you sure you want to delete ${file.name}?`)) {
+    e.preventDefault();
+    
+    // Use native confirm dialog
+    const shouldDelete = window.confirm(`Are you sure you want to delete "${file.name}"?\n\nThis action cannot be undone.`);
+    if (shouldDelete) {
       await deleteItem(file.path);
     }
   };
@@ -107,7 +122,11 @@ const FileRow: React.FC<{ file: FileInfo; depth: number }> = ({ file, depth }) =
               <button className="action-btn" onClick={(e) => { e.stopPropagation(); setIsEditing(true); }} title="Rename">
                 <Edit3 size={11} />
               </button>
-              <button className="action-btn" onClick={handleDelete} title="Delete">
+              <button 
+                className="action-btn delete-btn" 
+                onClick={handleDelete}
+                title="Delete"
+              >
                 <Trash2 size={11} />
               </button>
             </>
@@ -174,6 +193,176 @@ const InlineAdd: React.FC<{
   );
 };
 
+/* ─── Digital Pet ─────────────────────────────────────────── */
+const DigitalPet: React.FC = () => {
+  const { allFiles, graphData } = useStore();
+  const [speech, setSpeech] = useState<string | null>(null);
+
+  useEffect(() => {
+    const quotes = [
+      "Meow! 🐱",
+      "Try adding #task to organize quests!",
+      "Checking off boxes gives me XP! ✅",
+      "Use #creative for a purple aura ✨",
+      "Keep that combo going! 🔥",
+      "Use #journal to start your daily log 📝"
+    ];
+
+    const interval = setInterval(() => {
+      if (Math.random() > 0.6) {
+        setSpeech(quotes[Math.floor(Math.random() * quotes.length)]);
+        setTimeout(() => setSpeech(null), 5000);
+      }
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const xp = (allFiles.length * 10) + (graphData.links.length * 5);
+  const level = Math.floor(Math.sqrt(Math.max(xp, 0) / 10)) + 1;
+  const currentLevelBaseXp = Math.pow(level - 1, 2) * 10;
+  const nextLevelXp = Math.pow(level, 2) * 10;
+  
+  const progress = ((xp - currentLevelBaseXp) / (nextLevelXp - currentLevelBaseXp)) * 100;
+
+  let petFace = nopi00;
+  let status = 'Purring';
+  
+  if (level < 5) { petFace = nopi00; status = 'Curious'; }
+  else if (level < 10) { petFace = nopi05; status = 'Playful'; }
+  else if (level < 15) { petFace = nopi09; status = 'Sneaky'; }
+  else if (level < 20) { petFace = nopi14; status = 'Armored'; }
+  else if (level < 25) { petFace = nopi28; status = 'Golden'; }
+  else if (level < 35) { petFace = nopi32; status = 'Elemental'; }
+  else if (level < 43) { petFace = nopi42; status = 'Ethereal'; }
+  else { petFace = nopi46; status = 'Majestic'; }
+
+  return (
+    <div className="digital-pet-widget">
+      <div className="pet-header">
+        <span className="pet-name">Nopi</span>
+        <span className="pet-level">Lvl {level}</span>
+      </div>
+      <div className="pet-avatar-container">
+        {speech && (
+          <motion.div 
+            className="pet-speech-bubble"
+            initial={{ opacity: 0, y: 10, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+          >
+            {speech}
+          </motion.div>
+        )}
+        <img src={petFace} alt="Nopi" className="pet-avatar-img" />
+        <div className="pet-status">{status}</div>
+      </div>
+      <div className="pet-xp-bar">
+        <div className="pet-xp-fill" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
+      </div>
+      <div className="pet-xp-text">{xp} / {nextLevelXp} XP</div>
+    </div>
+  );
+};
+
+/* ─── Template Manager ─────────────────────────────────── */
+const TemplateManager: React.FC = () => {
+  const { templates, saveTemplate, deleteTemplate, tabContents, activeTab } = useStore();
+  const [isOpen, setIsOpen] = useState(false);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [templateCategory, setTemplateCategory] = useState('General');
+
+  const handleSaveTemplate = () => {
+    if (!templateName.trim()) return;
+    const content = activeTab ? (tabContents[activeTab] ?? '') : '';
+    if (!content.trim()) {
+      toast.error('Cannot save empty note as template');
+      return;
+    }
+    saveTemplate({
+      name: templateName.trim(),
+      content,
+      category: templateCategory,
+    });
+    setShowSaveModal(false);
+    setTemplateName('');
+    setTemplateCategory('General');
+  };
+
+  return (
+    <>
+      <div className="template-manager">
+        <button className="template-toggle" onClick={() => setIsOpen(!isOpen)}>
+          <LayoutTemplate size={14} />
+          <span>Templates ({templates.length})</span>
+          <ChevronRight size={14} style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
+        </button>
+        
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="template-list"
+          >
+            {templates.length === 0 && (
+              <div className="template-empty">No templates saved yet</div>
+            )}
+            {templates.map(t => (
+              <div key={t.id} className="template-item">
+                <span className="template-name">{t.name}</span>
+                <span className="template-category">{t.category}</span>
+                <button 
+                  className="template-delete" 
+                  onClick={() => deleteTemplate(t.id)}
+                  title="Delete template"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </motion.div>
+        )}
+        
+        <button className="template-save-btn" onClick={() => setShowSaveModal(true)}>
+          <Save size={12} />
+          <span>Save Current as Template</span>
+        </button>
+      </div>
+
+      {showSaveModal && (
+        <div className="modal-overlay" onClick={() => setShowSaveModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">Save as Template</div>
+            <label className="modal-label">Template Name</label>
+            <input
+              className="modal-input"
+              value={templateName}
+              onChange={e => setTemplateName(e.target.value)}
+              placeholder="e.g., Meeting Notes"
+              autoFocus
+            />
+            <label className="modal-label">Category</label>
+            <input
+              className="modal-input"
+              value={templateCategory}
+              onChange={e => setTemplateCategory(e.target.value)}
+              placeholder="e.g., Work, Personal"
+            />
+            <div className="modal-actions">
+              <button className="modal-btn" onClick={() => setShowSaveModal(false)}>Cancel</button>
+              <button className="modal-btn primary" onClick={handleSaveTemplate} disabled={!templateName.trim()}>
+                Save Template
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
 /* ─── Sidebar ────────────────────────────────────────────── */
 export const Sidebar: React.FC = () => {
   const { files, createFile, createFolder, vaultPath, refresh, isRefreshing } = useStore();
@@ -194,15 +383,7 @@ export const Sidebar: React.FC = () => {
     <div className="sidebar">
       {/* Header */}
       <div className="sidebar-header">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <span className="sidebar-vault-name">{vaultName}</span>
-          <button 
-            onClick={() => useStore.getState().testToast()} 
-            style={{ fontSize: '0.65rem', background: 'var(--bg-3)', border: '1px solid var(--bd-1)', borderRadius: '3px', cursor: 'pointer', padding: '2px 4px' }}
-          >
-            Test Toasts
-          </button>
-        </div>
+        <span className="sidebar-vault-name">{vaultName}</span>
         <div className="sidebar-actions">
           <button 
             className={`icon-btn sm ${isRefreshing ? 'spinning' : ''}`} 
@@ -252,13 +433,9 @@ export const Sidebar: React.FC = () => {
         )}
       </div>
 
-      {/* Local Graph */}
-      <div className="local-graph-panel">
-        <div className="local-graph-label">Local Graph</div>
-        <div className="local-graph-canvas">
-          <GraphView isMini />
-        </div>
-      </div>
+      <TemplateManager />
+      <DigitalPet />
+
     </div>
   );
 };
