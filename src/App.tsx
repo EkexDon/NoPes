@@ -7,16 +7,18 @@ import { JournalView } from './components/JournalView';
 import { useStore } from './store/useStore';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import {
+import { 
   FileText, Share2, Search, Settings,
   PanelLeftClose, PanelLeftOpen, Plus, X,
-  Shield, Palette, Keyboard, CalendarDays, Bot, Kanban
+  Shield, Palette, Keyboard, CalendarDays, Bot, Kanban,
+  Home, ChevronRight, Folder, LayoutGrid
 } from 'lucide-react';
 import { useKBar } from 'kbar';
 import { Toaster } from 'react-hot-toast';
 import { VaultChat } from './components/VaultChat';
 import { CanvasView } from './components/CanvasView';
 import { KanbanView } from './components/KanbanView';
+import { HomeView } from './components/HomeView';
 
 /* ─── Error Boundary ─────────────────────────────────────── */
 const MAX_AUTO_RETRIES = 2;
@@ -253,6 +255,9 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
   return (
     <div className="icon-sidebar">
       <div className="icon-dock-group">
+        <button className={`icon-btn ${viewMode === 'home' ? 'active' : ''}`} onClick={() => setViewMode('home')} title="Home (⌘H)">
+          <Home size={18} />
+        </button>
         <button className={`icon-btn ${viewMode === 'editor' ? 'active' : ''}`} onClick={() => setViewMode('editor')} title="Editor">
           <FileText size={18} />
         </button>
@@ -315,12 +320,88 @@ const EmptyState: React.FC = () => (
   </div>
 );
 
+/* ─── Breadcrumb Navigation ────────────────────────────── */
+const Breadcrumb: React.FC<{ 
+  vaultPath: string | null; 
+  activeTab: string | null;
+  viewMode: string;
+  onNavigate: (path: 'home' | 'vault') => void;
+}> = ({ vaultPath, activeTab, viewMode, onNavigate }) => {
+  if (!vaultPath) return null;
+  
+  const vaultName = vaultPath.split(/[\\/]/).pop() || 'Vault';
+  
+  // Build path segments from activeTab
+  const getPathSegments = () => {
+    if (!activeTab) return [];
+    const relativePath = activeTab.replace(vaultPath, '').replace(/^[/\\]/, '');
+    if (!relativePath) return [];
+    return relativePath.split(/[\\/]/);
+  };
+  
+  const segments = getPathSegments();
+  
+  return (
+    <div className="breadcrumb-bar">
+      <button 
+        className={`breadcrumb-item ${viewMode === 'home' ? 'active' : ''}`}
+        onClick={() => onNavigate('home')}
+      >
+        <Home size={14} />
+        <span>Home</span>
+      </button>
+      
+      <ChevronRight size={14} className="breadcrumb-separator" />
+      
+      <button 
+        className={`breadcrumb-item ${viewMode !== 'home' && !activeTab ? 'active' : ''}`}
+        onClick={() => onNavigate('vault')}
+      >
+        <Folder size={14} />
+        <span>{vaultName}</span>
+      </button>
+      
+      {segments.length > 0 && segments.map((segment, idx) => (
+        <React.Fragment key={idx}>
+          <ChevronRight size={14} className="breadcrumb-separator" />
+          <span className={`breadcrumb-item ${idx === segments.length - 1 ? 'active' : ''}`}>
+            {idx === segments.length - 1 && viewMode !== 'editor' && (
+              <>
+                {viewMode === 'canvas' && <LayoutGrid size={14} />}
+                {viewMode === 'kanban' && <Kanban size={14} />}
+                {viewMode === 'graph' && <Share2 size={14} />}
+                {viewMode === 'journal' && <CalendarDays size={14} />}
+                {viewMode === 'editor' && <FileText size={14} />}
+              </>
+            )}
+            {idx === segments.length - 1 ? (
+              <span>{segment.replace(/\.md$/, '')}</span>
+            ) : (
+              <span>{segment}</span>
+            )}
+          </span>
+        </React.Fragment>
+      ))}
+      
+      {activeTab && segments.length === 0 && (
+        <>
+          <ChevronRight size={14} className="breadcrumb-separator" />
+          <span className="breadcrumb-item active">
+            <FileText size={14} />
+            <span>{activeTab.split(/[\\/]/).pop()?.replace(/\.md$/, '')}</span>
+          </span>
+        </>
+      )}
+    </div>
+  );
+};
+
 /* ─── App Root ───────────────────────────────────────────── */
 const App: React.FC = () => {
   const { 
     vaultPath, setVaultPath, activeTab, viewMode, isSidebarOpen, setSidebarOpen, 
     setViewMode, createFile, closeTab, loadGraphData, loadFiles, importFiles,
-    isSplitView, rightActiveTab, rightViewMode
+    isSplitView, rightActiveTab, rightViewMode, zenMode, setZenMode
   } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -361,13 +442,15 @@ const App: React.FC = () => {
     if (vaultPath) {
       loadFiles();
       loadGraphData();
+      // Set default view to Home when vault opens
+      setViewMode('home');
     }
     // Manage AI process based on setting
     const { isAiEnabled } = useStore.getState();
     import('@tauri-apps/api/core').then(m => {
       m.invoke('manage_ollama', { active: isAiEnabled }).catch(console.error);
     });
-  }, [vaultPath, loadFiles, loadGraphData]);
+  }, [vaultPath, loadFiles, loadGraphData, setViewMode]);
 
   const handleOpenVault = useCallback(async () => {
     const selected = await open({ directory: true, multiple: false });
@@ -384,13 +467,15 @@ const App: React.FC = () => {
         case 'g': e.preventDefault(); setViewMode('graph'); break;
         case 'j': e.preventDefault(); setViewMode('journal'); break;
         case 'm': e.preventDefault(); setViewMode('kanban'); break;
+        case 'h': e.preventDefault(); setViewMode('home'); break;
         case 'n': e.preventDefault(); createFile('Untitled'); break;
         case 'w': e.preventDefault(); if (activeTab) closeTab(activeTab); break;
+        case 'z': if (e.shiftKey) { e.preventDefault(); setZenMode(!zenMode); } break;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isSidebarOpen, activeTab, setSidebarOpen, setViewMode, createFile, closeTab]);
+  }, [isSidebarOpen, activeTab, setSidebarOpen, setViewMode, createFile, closeTab, zenMode, setZenMode]);
 
   useEffect(() => {
     if (viewMode === 'graph') loadGraphData();
@@ -429,7 +514,7 @@ const App: React.FC = () => {
             fontSize: '0.85rem'
           } 
         }} />
-        <div className="app-container">
+        <div className={`app-container ${zenMode ? 'zen-mode-active' : ''}`}>
           <IconDock onSettings={() => setSettingsOpen(true)} />
           {vaultPath && isSidebarOpen && <Sidebar />}
           <main className="main-content" ref={containerRef} style={{ display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
@@ -439,14 +524,26 @@ const App: React.FC = () => {
               <>
                 {/* Left Pane */}
                 <div style={{ flex: isSplitView ? `0 0 ${leftWidth}%` : 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                  {/* Breadcrumb Navigation */}
+                  <Breadcrumb 
+                    vaultPath={vaultPath}
+                    activeTab={activeTab}
+                    viewMode={viewMode}
+                    onNavigate={(target) => {
+                      if (target === 'home') setViewMode('home');
+                      else setViewMode('editor');
+                    }}
+                  />
+                  
                   { viewMode === 'graph' ? <GraphView /> :
                     viewMode === 'journal' ? <JournalView /> :
                     viewMode === 'canvas' ? <CanvasView /> :
                     viewMode === 'kanban' ? <KanbanView /> :
+                    viewMode === 'home' ? <HomeView /> :
                     (
                       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                         <TabBar />
-                        {activeTab ? <NoteEditor tabId={activeTab} /> : <EmptyState />}
+                        {activeTab ? <NoteEditor key={activeTab} tabId={activeTab} /> : <EmptyState />}
                       </div>
                     )
                   }
@@ -476,7 +573,7 @@ const App: React.FC = () => {
                       rightViewMode === 'canvas' ? <CanvasView /> :
                       rightViewMode === 'kanban' ? <KanbanView /> :
                       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                        {rightActiveTab ? <NoteEditor tabId={rightActiveTab} /> : <EmptyState />}
+                        {rightActiveTab ? <NoteEditor key={rightActiveTab} tabId={rightActiveTab} /> : <EmptyState />}
                       </div>
                     }
                   </div>
