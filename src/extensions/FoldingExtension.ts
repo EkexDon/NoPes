@@ -17,6 +17,7 @@ export const FoldingExtension = Extension.create({
           apply(tr, foldedSet) {
             const meta = tr.getMeta(foldingKey);
             if (meta) {
+              if (meta.clear) return new Set<number>();
               const newSet = new Set(foldedSet);
               if (newSet.has(meta.pos)) {
                 newSet.delete(meta.pos);
@@ -111,5 +112,16 @@ export const FoldingExtension = Extension.create({
         },
       }),
     ];
+  },
+
+  addCommands() {
+    return {
+      clearFolding: () => ({ tr, dispatch }: any) => {
+        if (dispatch) {
+          dispatch(tr.setMeta(foldingKey, { clear: true }));
+        }
+        return true;
+      },
+    } as any;
   },
 });

@@ -14,6 +14,39 @@ import 'tippy.js/dist/tippy.css';
 import { MathExtension } from '@aarkue/tiptap-math-extension';
 import 'katex/dist/katex.min.css';
 import { Node } from '@tiptap/core';
+import CodeBlock from '@tiptap/extension-code-block';
+
+// Custom FontSize extension that properly handles font-size styling
+const FontSize = Extension.create({
+  name: 'fontSize',
+  addGlobalAttributes() {
+    return [
+      {
+        types: ['textStyle'],
+        attributes: {
+          fontSize: {
+            default: null,
+            parseHTML: (element) => element.style.fontSize?.replace(/['"]+/g, ''),
+            renderHTML: (attributes) => {
+              if (!attributes.fontSize) return {};
+              return { style: `font-size: ${attributes.fontSize}` };
+            },
+          },
+        },
+      },
+    ];
+  },
+  addCommands() {
+    return {
+      setFontSize: (fontSize: string) => ({ chain }) => {
+        return chain().setMark('textStyle', { fontSize }).run();
+      },
+      unsetFontSize: () => ({ chain }) => {
+        return chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run();
+      },
+    };
+  },
+});
 import { FoldingExtension } from '../extensions/FoldingExtension';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -22,14 +55,13 @@ import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import html2pdf from 'html2pdf.js';
-import mermaid from 'mermaid';
 import {
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, Link as LinkIcon,
   Image as ImageIcon, List, ListOrdered, Quote, Code, MoreHorizontal,
   Minus, FileText, Underline as UnderlineIcon, Palette, Sparkles, Hash, Trash2,
   Search, X as XIcon, ChevronUp, ChevronDown,
   Grid3x3, LayoutTemplate, GitBranch,
-  RowsIcon, Columns, Trash, TableIcon, ChevronLeft, ChevronRight, Printer
+  RowsIcon, Columns, Trash, TableIcon, ChevronLeft, ChevronRight, Printer, Focus
 } from 'lucide-react';
 import { useStore, extractTags } from '../store/useStore';
 import { writeFile, exists, mkdir } from '@tauri-apps/plugin-fs';
@@ -38,15 +70,26 @@ import { AIService } from '../workers/AIService';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { disposeEditorInstance } from './editorLifecycle';
 
-// Init mermaid once
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'dark',
-  darkMode: true,
-  fontFamily: 'Inter, sans-serif',
-  fontSize: 14,
-});
+const COMBO_RESET_MS = 2000;
+
+// Lazy init mermaid
+let mermaidInstance: any = null;
+const initMermaid = async () => {
+  if (!mermaidInstance) {
+    const m = await import('mermaid');
+    mermaidInstance = m.default || m;
+    mermaidInstance.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      darkMode: true,
+      fontFamily: 'Inter, sans-serif',
+      fontSize: 14,
+    });
+  }
+  return mermaidInstance;
+};
 
 /* ─────────────────────────────────────────────
    Resolve a stored relative path (e.g. "assets/foo.mp4")
@@ -61,7 +104,12 @@ const resolveAssetSrc = (relPath: string): string => {
   if (!vault) return relPath;
   const sep = vault.includes('\\') ? '\\' : '/';
   const absPath = `${vault}${sep}${relPath}`;
-  return convertFileSrc(absPath);
+  try {
+    return convertFileSrc(absPath);
+  } catch (e) {
+    console.warn('[NoPes:Asset] Failed to resolve asset path:', relPath, e);
+    return relPath;
+  }
 };
 
 const NopesImage = Image.extend({
@@ -76,31 +124,57 @@ const NopesImage = Image.extend({
       if (isPdf) {
         // ── PDF: full native iframe using WebKit's built-in PDF renderer ──
         const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'margin:1rem 0;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.4);';
+        wrapper.style.cssText = 'margin:1rem 0;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.4);position:relative;';
+        
+        // Loading indicator
+        const loader = document.createElement('div');
+        loader.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.3);color:#aaa;font-size:13px;z-index:1;';
+        loader.textContent = 'Loading PDF…';
+        wrapper.appendChild(loader);
         
         const iframe = document.createElement('iframe');
         iframe.src = resolveAssetSrc(relPath);
-        iframe.style.cssText = 'width:100%;height:80vh;border:none;display:block;border-radius:8px;';
+        iframe.style.cssText = 'width:100%;height:80vh;border:none;display:block;border-radius:8px;position:relative;z-index:2;';
         iframe.setAttribute('title', relPath.split(/[\/\\]/).pop() || 'PDF');
+        iframe.setAttribute('loading', 'lazy');
+        iframe.onload = () => { loader.remove(); };
+        iframe.onerror = () => { loader.textContent = 'Failed to load PDF'; };
         
         wrapper.appendChild(iframe);
         dom = wrapper;
       } else if (isVideo) {
         // ── Video: native <video> with controls ──────────────────────
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'margin:1rem 0;position:relative;';
+        
         dom = document.createElement('video');
         const vid = dom as HTMLVideoElement;
         vid.src = resolveAssetSrc(relPath);
         vid.controls = true;
         vid.loop = false;
-        vid.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
+        vid.preload = 'metadata'; // Don't preload full video, just metadata for zero-latency first frame
+        vid.style.cssText = 'max-width:100%;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
+        vid.onerror = () => {
+          vid.style.opacity = '0.4';
+          vid.insertAdjacentHTML('afterend', '<div style="color:#f87171;font-size:12px;margin-top:4px;">⚠ Video failed to load</div>');
+        };
+        
+        wrapper.appendChild(vid);
+        dom = wrapper;
       } else {
         // ── Image ────────────────────────────────────────────────────
         dom = document.createElement('img');
         const img = dom as HTMLImageElement;
         img.src = resolveAssetSrc(relPath);
+        img.setAttribute('loading', 'lazy'); // Lazy load for performance
         if (node.attrs.alt)   img.alt   = node.attrs.alt;
         if (node.attrs.title) img.title = node.attrs.title;
-        img.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;';
+        img.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;transition:opacity 0.3s;';
+        img.onload = () => { img.style.opacity = '1'; };
+        img.onerror = () => {
+          img.style.opacity = '0.3';
+          img.alt = `⚠ Image not found: ${relPath}`;
+        };
       }
 
       return { dom } as any;
@@ -123,7 +197,8 @@ const MermaidView = (props: any) => {
     const renderDiagram = async () => {
       try {
         if (!code.trim()) { setSvg(''); setError(''); return; }
-        const { svg: s } = await mermaid.render(`mermaid-${id}`, code);
+        const m = await initMermaid();
+        const { svg: s } = await m.render(`mermaid-${id}`, code);
         if (active) { setSvg(s); setError(''); }
       } catch (err: any) {
         if (active) setError(err.message || 'Syntax error');
@@ -188,6 +263,38 @@ const MermaidExtension = Node.create({
   },
   addNodeView() {
     return ReactNodeViewRenderer(MermaidView);
+  }
+});
+
+// Extend CodeBlock to render mermaid diagrams with the MermaidView
+const MermaidCodeBlock = CodeBlock.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer((props: any) => {
+      const language = props.node.attrs.language;
+      // Get text content from the node
+      const code = props.node.textContent || '';
+      
+      if (language === 'mermaid') {
+        // Use the mermaid renderer for mermaid code blocks
+        // Create a fake props object that matches what MermaidView expects
+        const mermaidProps = {
+          ...props,
+          node: {
+            ...props.node,
+            attrs: { code }
+          }
+        };
+        return <MermaidView {...mermaidProps} />;
+      }
+      // Default code block rendering for other languages
+      return (
+        <NodeViewWrapper>
+          <pre className="mermaid-source">
+            <code>{code}</code>
+          </pre>
+        </NodeViewWrapper>
+      );
+    });
   }
 });
 
@@ -343,7 +450,7 @@ const COMMAND_ITEMS = [
   { title: 'Code Block',    group: 'Format', icon: <Code size={14} />,         command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleCodeBlock().run() },
   { title: 'Divider',       group: 'Format', icon: <Minus size={14} />,        command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setHorizontalRule().run() },
   // ─ Inserts
-  { title: 'Table',         group: 'Insert', icon: <Grid3x3 size={14} />,      command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
+  { title: 'Table',         group: 'Insert', icon: <Grid3x3 size={14} />,      command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertTable({ rows: 1, cols: 2, withHeaderRow: false }).run() },
   { title: 'Mermaid Diagram', group: 'Insert', icon: <GitBranch size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent('```mermaid\ngraph TD\n    A[Start] --> B{Decision}\n    B -->|Yes| C[Result 1]\n    B -->|No| D[Result 2]\n```\n').run() },
   // ─ Templates
   ...Object.entries(TEMPLATES).map(([title, content]) => ({
@@ -538,12 +645,23 @@ const Toolbar: React.FC<{
       <Divider/>
       <select
         className="toolbar-select"
-        defaultValue="16px"
+        value={(() => {
+          const attrs = editor.getAttributes('textStyle');
+          return attrs?.fontSize || '16px';
+        })()}
         title="Font size"
         onMouseDown={e => e.stopPropagation()}
-        onChange={e => editor.chain().focus().setMark('textStyle', { fontSize: e.target.value }).run()}
+        onChange={e => {
+          const size = e.target.value;
+          if (size === '16px') {
+            (editor.chain().focus() as any).unsetFontSize().run();
+          } else {
+            (editor.chain().focus() as any).setFontSize(size).run();
+          }
+        }}
       >
-        {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+        <option value="16px">Default</option>
+        {SIZES.filter(s => s !== '16px').map(s => <option key={s} value={s}>{s}</option>)}
       </select>
       <div style={{ position: 'relative' }}>
         <button className="toolbar-btn" title="Text color" onMouseDown={e => { e.preventDefault(); setShowColor(v => !v); }}>
@@ -567,7 +685,7 @@ const Toolbar: React.FC<{
       <TBtn active={editor.isActive('link')} title="Insert link" onClick={onInsertLink}><LinkIcon size={15}/></TBtn>
       <TBtn title="Insert image" onClick={onInsertImage}><ImageIcon size={15}/></TBtn>
       <Divider/>
-      <TBtn active={editor.isActive('table')} title="Insert table (3×3)" onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}><Grid3x3 size={15}/></TBtn>
+      <TBtn active={editor.isActive('table')} title="Insert table (1×2)" onClick={() => editor.chain().focus().insertTable({ rows: 1, cols: 2, withHeaderRow: false }).run()}><Grid3x3 size={15}/></TBtn>
     </div>
   );
 };
@@ -688,7 +806,8 @@ function preprocessMath(md: string): string {
 export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const { 
     allFiles, activeTab, tabContents, saveFile, openFile, createFile, graphData,
-    pendingAssetInserts, setPendingAssetInserts, aiIndex 
+    pendingAssetInserts, setPendingAssetInserts, aiIndex,
+    zenMode
   } = useStore();
   
   const currentTab = tabId || activeTab;
@@ -698,6 +817,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
   const [aiStatus, setAiStatus] = useState('idle');
   const allFilesRef = useRef(allFiles);
+  const tabContentsRef = useRef(tabContents);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<any>(null);
 
@@ -706,13 +826,30 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMatchIndex, setSearchMatchIndex] = useState(0);
   const [searchMatchCount, setSearchMatchCount] = useState(0);
-  const searchMatchesRef = useRef<{ from: number; to: number }[]>([]);
+
+  // ── Combo widget state ─────────────────────────────────────────────
+  const [comboCount, setComboCount] = useState(0);
+  const comboTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastDocSizeRef = useRef(-1); // -1 = uninitialised (set after editor ready)
 
   const storeActionsRef = useRef({ openFile, createFile });
   useEffect(() => { storeActionsRef.current = { openFile, createFile }; }, [openFile, createFile]);
 
   const content = currentTab ? (tabContents[currentTab] ?? '') : '';
   useEffect(() => { allFilesRef.current = allFiles; }, [allFiles]);
+  useEffect(() => { tabContentsRef.current = tabContents; }, [tabContents]);
+
+  // ── Tag-based features (aura, stamp, #topsecret) ─────────────────
+  const tags = extractTags(content);
+  const auraClass = tags.includes('task') ? 'aura-task'
+    : tags.includes('creative') ? 'aura-creative'
+    : tags.includes('journal') ? 'aura-journal'
+    : '';
+  const stampLabel = tags.includes('done') ? 'DONE'
+    : tags.includes('approved') ? 'APPROVED'
+    : tags.includes('draft') ? 'DRAFT'
+    : null;
+  const isTopSecret = tags.includes('topsecret');
 
   const fileName = currentTab?.split('/').pop()?.replace(/\.md$/, '') ?? 'Untitled';
   const backlinks = graphData.links.filter(l => l.target === currentTab);
@@ -731,10 +868,11 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       try {
         const qVec = await AIService.embedQuery(content);
         const hits = await AIService.search(qVec, aiIndex, 5);
+        const cachedContents = tabContentsRef.current;
         const tags = new Set<string>();
         for (const h of hits) {
           if (h.score < 0.25 || h.path === currentTab) continue;
-          const text = tabContents[h.path];
+          const text = cachedContents[h.path];
           if (text) {
             extractTags(text).forEach(t => tags.add(t));
           }
@@ -745,7 +883,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       } catch {}
     }, 1500);
     return () => clearTimeout(to);
-  }, [content, aiIndex, aiStatus, currentTab, tabContents]);
+  }, [content, aiIndex, aiStatus, currentTab]);
 
   const [unlinkedMentions, setUnlinkedMentions] = useState<typeof allFiles>([]);
 
@@ -758,12 +896,13 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
     const computeUnlinked = async () => {
       const mentions: typeof allFiles = [];
       const lowerName = fileName.toLowerCase();
+      const cachedContents = tabContentsRef.current;
       
       for (const f of allFiles) {
         if (f.path === currentTab) continue;
         if (backlinksFiles.find(b => b.path === f.path)) continue;
         
-        let text = tabContents[f.path];
+        let text = cachedContents[f.path];
         if (text === undefined) {
            try { text = await readTextFile(f.path); } catch { text = ''; }
         }
@@ -776,7 +915,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
     };
     computeUnlinked();
     return () => { cancel = true; };
-  }, [currentTab, fileName, allFiles, backlinksFiles, tabContents]);
+  }, [currentTab, fileName, allFiles, backlinksFiles]);
 
   const insertImage = async (editor: ReturnType<typeof useEditor>) => {
     if (!editor) return;
@@ -799,16 +938,18 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const editor = useEditor(
     {
       extensions: [
-        StarterKit,
+        StarterKit.configure({ codeBlock: false }), // Use custom MermaidCodeBlock instead
         Table.configure({ resizable: true }),
         TableRow,
         TableHeader,
         TableCell,
+        MermaidCodeBlock,
         MermaidExtension,
         MathExtension.configure({ evaluation: false }),
         FoldingExtension,
         Underline,
         TextStyle,
+        FontSize,
         Color,
         NopesImage.configure({ allowBase64: true }),
         LinkExtension.configure({ openOnClick: false }),
@@ -896,18 +1037,38 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
           },
         }),
       ],
-      content,
+      content: preprocessMath(content),
       onUpdate: ({ editor }) => {
         if (!currentTab) return;
-        const { isAutoSaveEnabled } = useStore.getState();
-        if (!isAutoSaveEnabled) return;
 
         const md = (editor.storage as any).markdown.getMarkdown();
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        setSaving(true);
-        saveTimerRef.current = setTimeout(() => {
-          saveFile(currentTab, md).finally(() => setTimeout(() => setSaving(false), 600));
-        }, 400);
+
+        // ── Autosave ──────────────────────────────────────────────────
+        const { isAutoSaveEnabled } = useStore.getState();
+        if (isAutoSaveEnabled) {
+          if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+          setSaving(true);
+          saveTimerRef.current = setTimeout(() => {
+            saveFile(currentTab, md).finally(() => setTimeout(() => setSaving(false), 600));
+          }, 400);
+        }
+
+        // ── Combo: only increment on actual character insertions ────────
+        const newSize = editor.state.doc.content.size;
+        if (lastDocSizeRef.current >= 0 && newSize > lastDocSizeRef.current) {
+          setComboCount(prev => prev + 1);
+          if (comboTimerRef.current) clearTimeout(comboTimerRef.current);
+          comboTimerRef.current = setTimeout(() => setComboCount(0), COMBO_RESET_MS);
+        }
+        lastDocSizeRef.current = newSize;
+
+        // ── Achievements: wikilink & word milestones ──────────────────
+        const wordCount = md.trim().split(/\s+/).filter(Boolean).length;
+        const { unlockAchievement: unlock, allFiles: af } = useStore.getState();
+        if (/\[\[.+?\]\]/.test(md)) unlock('first-link', 'First Connection');
+        if (wordCount >= 500) unlock('deep-diver-500', 'Deep Diver');
+        if (wordCount >= 2000) unlock('novelist', 'Novelist');
+        if (af.filter(f => !f.is_dir).length >= 10) unlock('architect-10', 'Architect');
       },
       editorProps: {
         attributes: {
@@ -924,39 +1085,54 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       editorRef.current = editor;
     }
     return () => {
+      // Cancel any pending autosave to prevent writes to a dead editor
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      // Cancel combo timer to prevent setState-after-unmount
+      if (comboTimerRef.current) {
+        clearTimeout(comboTimerRef.current);
+        comboTimerRef.current = null;
+      }
+      lastDocSizeRef.current = -1;
       if (editorRef.current) {
         console.log('[NoteEditor] Explicitly destroying editor instance.');
-        try {
-          // Clear folding decorations to free references (L-01)
-          editorRef.current.commands.clearFolding?.();
-        } catch (e) {
-          console.warn('[NoteEditor] Failed to clear folding before destroy:', e);
-        }
-        editorRef.current.destroy();
-        editorRef.current = null;
+        editorRef.current = disposeEditorInstance(editorRef.current);
       }
     };
   }, [editor]);
 
-  // Sync content when tab changes
+  // Sync content when tab changes; also reset lastDocSizeRef so combo
+  // doesn't fire spuriously on the first update after a tab switch.
   useEffect(() => {
-    if (!editor) return;
-    const curr = (editor.storage as any).markdown?.getMarkdown?.() ?? '';
-    if (curr !== content) {
-      editor.commands.setContent(preprocessMath(content), { emitUpdate: false } as any);
+    if (!editor || editor.isDestroyed) return;
+    try {
+      const curr = (editor.storage as any).markdown?.getMarkdown?.() ?? '';
+      if (curr !== content) {
+        editor.commands.setContent(preprocessMath(content), { emitUpdate: false } as any);
+      }
+      // Initialise / reset the baseline doc size for the combo guard
+      lastDocSizeRef.current = editor.state.doc.content.size;
+    } catch (e) {
+      console.warn('[NoteEditor] Content sync failed (editor may be transitioning):', e);
     }
   }, [currentTab, content]);
 
   // Auto-insert dragged assets
   useEffect(() => {
-  if (editor && pendingAssetInserts.length > 0) {
-    pendingAssetInserts.forEach(pth => {
-      // TipTap Image Extension syntax -> inserts the logical path natively into the doc.
-      editor.chain().focus().setImage({ src: pth }).run();
-    });
-    setPendingAssetInserts([]);
-  }
-}, [editor, pendingAssetInserts, setPendingAssetInserts]);
+    if (editor && !editor.isDestroyed && pendingAssetInserts.length > 0) {
+      try {
+        pendingAssetInserts.forEach(pth => {
+          // TipTap Image Extension syntax -> inserts the logical path natively into the doc.
+          editor.chain().focus().setImage({ src: pth }).run();
+        });
+      } catch (e) {
+        console.warn('[NoteEditor] Failed to insert dragged assets:', e);
+      }
+      setPendingAssetInserts([]);
+    }
+  }, [editor, pendingAssetInserts, setPendingAssetInserts]);
 
 // Drag-and-drop handler (used via JSX props on editor-body)
 const [isDragOver, setIsDragOver] = useState(false);
@@ -969,35 +1145,52 @@ const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
 
 const handleDragLeave = () => setIsDragOver(false);
 
+const [isImporting, setIsImporting] = useState(false);
+
 const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
   e.preventDefault();
   setIsDragOver(false);
   const files = e.dataTransfer?.files;
   if (!files || files.length === 0) return;
-  const assetsDir = await join(useStore.getState().vaultPath || '', 'assets');
-  if (!(await exists(assetsDir))) {
-    await mkdir(assetsDir);
-  }
-  const newInserts: string[] = [];
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-    if (!['png','jpg','jpeg','gif','webp','svg','mp4','webm','mov','pdf'].includes(ext)) continue;
-    const arrayBuf = await file.arrayBuffer();
-    const uint8 = new Uint8Array(arrayBuf);
-    const uniqueName = `${Date.now()}_${file.name}`;
-    const targetPath = await join(assetsDir, uniqueName);
-    await writeFile(targetPath, uint8);
-    const relPath = 'assets/' + uniqueName;
-    newInserts.push(relPath);
-    useStore.getState().addMedia({
-      id: `${Date.now()}_${i}`,
-      type: ['mp4','webm','mov'].includes(ext) ? 'video' : 'image',
-      src: relPath,
-    });
-  }
-  if (newInserts.length) {
-    setPendingAssetInserts([...pendingAssetInserts, ...newInserts]);
+  
+  setIsImporting(true);
+  try {
+    const assetsDir = await join(useStore.getState().vaultPath || '', 'assets');
+    if (!(await exists(assetsDir))) {
+      await mkdir(assetsDir);
+    }
+    const newInserts: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+      if (!['png','jpg','jpeg','gif','webp','svg','mp4','webm','mov','pdf'].includes(ext)) continue;
+      try {
+        const arrayBuf = await file.arrayBuffer();
+        const uint8 = new Uint8Array(arrayBuf);
+        const uniqueName = `${Date.now()}_${file.name}`;
+        const targetPath = await join(assetsDir, uniqueName);
+        await writeFile(targetPath, uint8);
+        const relPath = 'assets/' + uniqueName;
+        newInserts.push(relPath);
+        useStore.getState().addMedia({
+          id: `${Date.now()}_${i}`,
+          type: ['mp4','webm','mov'].includes(ext) ? 'video' : 'image',
+          src: relPath,
+        });
+      } catch (fileErr) {
+        console.error(`[NoPes:Drop] Failed to import ${file.name}:`, fileErr);
+        import('react-hot-toast').then(m => m.toast.error(`Failed to import ${file.name}`));
+      }
+    }
+    if (newInserts.length) {
+      setPendingAssetInserts([...pendingAssetInserts, ...newInserts]);
+      import('react-hot-toast').then(m => m.toast.success(`Imported ${newInserts.length} file(s)`));
+    }
+  } catch (err) {
+    console.error('[NoPes:Drop] Import failed:', err);
+    import('react-hot-toast').then(m => m.toast.error('Media import failed'));
+  } finally {
+    setIsImporting(false);
   }
 };
 
@@ -1005,13 +1198,49 @@ const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
 type CtxMenu = { x: number; y: number; domNode: HTMLElement } | null;
 const [ctxMenu, setCtxMenu] = useState<CtxMenu>(null);
 
+// ── Context menu for table cells ─────────────────────────
+type TableCtxMenu = { x: number; y: number; cellElement: HTMLElement } | null;
+const [tableCtxMenu, setTableCtxMenu] = useState<TableCtxMenu>(null);
+
+// Keep context menu within viewport bounds
+// If near bottom, flip menu to appear above the click point
+const constrainToViewport = (x: number, y: number, menuWidth = 150, menuHeight = 280) => {
+  const padding = 8;
+  const flipThreshold = window.innerHeight - menuHeight - padding;
+  
+  // Constrain X
+  const maxX = window.innerWidth - menuWidth - padding;
+  const constrainedX = Math.min(Math.max(padding, x), maxX);
+  
+  // Flip Y if near bottom
+  let constrainedY = y;
+  if (y > flipThreshold) {
+    constrainedY = y - menuHeight; // Show above click
+  }
+  // Ensure Y stays within bounds
+  constrainedY = Math.min(Math.max(padding, constrainedY), window.innerHeight - menuHeight - padding);
+  
+  return { x: constrainedX, y: constrainedY };
+};
+
 const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
   const target = e.target as HTMLElement;
+  
+  // Check for table cell first (higher priority)
+  const cell = target.closest('td, th') as HTMLElement | null;
+  if (cell && editor?.isActive('table')) {
+    e.preventDefault();
+    const pos = constrainToViewport(e.clientX, e.clientY);
+    setTableCtxMenu({ x: pos.x, y: pos.y, cellElement: cell });
+    return;
+  }
+  
   // Walk up to find img / video / iframe
   const media = target.closest('img, video, iframe') as HTMLElement | null;
   if (!media) return; // not a media element — let browser handle it
   e.preventDefault();
-  setCtxMenu({ x: e.clientX, y: e.clientY, domNode: media });
+  const pos = constrainToViewport(e.clientX, e.clientY, 120, 40);
+  setCtxMenu({ x: pos.x, y: pos.y, domNode: media });
 };
 
 const closeCtxMenu = () => setCtxMenu(null);
@@ -1038,18 +1267,79 @@ const deleteMediaNode = () => {
   closeCtxMenu();
 };
 
-// Dismiss context menu on Escape or outside click
+// Table context menu helpers
+const closeTableCtxMenu = () => setTableCtxMenu(null);
+
+const runTableCommand = (command: () => void) => {
+  if (!editor || editor.isDestroyed) return;
+  try {
+    command();
+  } catch (err) {
+    console.error('Table command error:', err);
+  }
+  closeTableCtxMenu();
+};
+
+// Dismiss context menus on Escape or outside click
 useEffect(() => {
-  if (!ctxMenu) return;
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeCtxMenu(); };
-  const onDown = () => closeCtxMenu();
+  if (!ctxMenu && !tableCtxMenu) return;
+  const onKey = (e: KeyboardEvent) => { 
+    if (e.key === 'Escape') {
+      closeCtxMenu();
+      closeTableCtxMenu();
+    }
+  };
+  const onDown = () => {
+    closeCtxMenu();
+    closeTableCtxMenu();
+  };
   document.addEventListener('keydown', onKey);
   document.addEventListener('mousedown', onDown);
   return () => {
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('mousedown', onDown);
   };
-}, [ctxMenu]);
+}, [ctxMenu, tableCtxMenu]);
+
+// ── Table + button click handler ────────────────────────────
+// The CSS pseudo-elements for + buttons are positioned at cell edges.
+// We detect clicks on the table and determine if they were in the button zone.
+useEffect(() => {
+  if (!editor || editor.isDestroyed) return;
+  const editorEl = editor.view.dom as HTMLElement;
+  
+  const handleTableClick = (e: MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const cell = target.closest('td, th') as HTMLElement | null;
+    if (!cell || !editor.isActive('table')) return;
+    
+    const rect = cell.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const isRightEdge = x > rect.width - 20 && x <= rect.width + 20;
+    const isBottomEdge = y > rect.height - 20 && y <= rect.height + 20;
+    
+    // Check if this cell is in the last row (for column add button)
+    const row = cell.closest('tr');
+    const table = row?.closest('table');
+    const isLastRow = row && table ? row === table.querySelector('tr:last-child') : false;
+    
+    if (isRightEdge) {
+      // Clicked on row add button
+      e.preventDefault();
+      e.stopPropagation();
+      editor.chain().focus().addRowAfter().run();
+    } else if (isBottomEdge && isLastRow) {
+      // Clicked on column add button
+      e.preventDefault();
+      e.stopPropagation();
+      editor.chain().focus().addColumnAfter().run();
+    }
+  };
+  
+  editorEl.addEventListener('click', handleTableClick);
+  return () => editorEl.removeEventListener('click', handleTableClick);
+}, [editor]);
 
   // ── Search: compute & highlight matches ─────────────────────────────
   const applySearchHighlights = useCallback((q: string, currentIndex: number) => {
@@ -1072,7 +1362,6 @@ useEffect(() => {
     if (!q || q.trim() === '') {
       setSearchMatchCount(0);
       setSearchMatchIndex(0);
-      searchMatchesRef.current = [];
       return;
     }
 
@@ -1171,8 +1460,44 @@ useEffect(() => {
     return () => document.removeEventListener('keydown', handleKey);
   }, [currentTab]);
 
+  // ── Zen mode: spawn floating particle on each keypress ──────────────
   useEffect(() => {
-    if (!editor) return;
+    if (!zenMode) return;
+    const colors = ['#00c6ff', '#7c6dff', '#ff6bdf', '#ffe066', '#6dffc6'];
+    const spawnParticle = (e: KeyboardEvent) => {
+      if (e.key.length !== 1 && e.key !== 'Enter') return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+      const dot = document.createElement('div');
+      dot.className = 'zen-particle';
+      // Use position:fixed with viewport coords (getBoundingClientRect is already viewport-relative)
+      dot.style.position = 'fixed';
+      dot.style.left = `${rect.left + Math.random() * 10 - 5}px`;
+      dot.style.top = `${rect.top - 4}px`;
+      dot.style.color = colors[Math.floor(Math.random() * colors.length)];
+      dot.style.background = dot.style.color;
+      document.body.appendChild(dot);
+      setTimeout(() => dot.remove(), 850);
+    };
+    document.addEventListener('keydown', spawnParticle);
+    return () => document.removeEventListener('keydown', spawnParticle);
+  }, [zenMode]);
+
+  // Ref to track cleanup functions for tippy delegate & click handler
+  const tippyCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    
+    // Clean up previous tippy delegate if it exists (prevents leak on editor recreation)
+    if (tippyCleanupRef.current) {
+      tippyCleanupRef.current();
+      tippyCleanupRef.current = null;
+    }
+
     const instance = delegate(document.body, {
       target: '.wikilink-marker',
       content(reference) {
@@ -1187,28 +1512,24 @@ useEffect(() => {
       allowHTML: true,
       theme: 'nopes',
       placement: 'top',
-      interactive: false, // Prevents the tooltip from being a separate "window" that steals mouse events
+      interactive: false,
       delay: [50, 0],
       offset: [0, 8],
     });
     
-    // Hard native mousedown listener to absolutely guarantee it intercepts before ProseMirror's mousedown handlers
+    // Hard native mousedown listener to intercept before ProseMirror's mousedown handlers
     const handleGlobalClick = (e: MouseEvent) => {
       let target = e.target as HTMLElement;
-      // Handle clicks on text nodes inside the marker
       if (target && (target as any).nodeType === 3) target = target.parentElement as HTMLElement;
       if (!target || !target.closest) return;
       
       const marker = target.closest('.wikilink-marker');
       if (marker) {
-         console.log('--- WIKILINK MOUSEDOWN DETECTED ---');
          e.preventDefault();
          e.stopPropagation();
          
          const linkName = marker.getAttribute('data-target') || '';
          const file = allFilesRef.current.find(f => f.name.replace(/\.md$/, '').toLowerCase() === linkName.toLowerCase());
-         
-         console.log('Target:', linkName, 'Found file:', file?.path);
          
          if (file) {
            storeActionsRef.current.openFile(file.path);
@@ -1220,10 +1541,13 @@ useEffect(() => {
     
     document.addEventListener('mousedown', handleGlobalClick, true);
 
-    return () => {
+    const cleanup = () => {
       instance.destroy();
       document.removeEventListener('mousedown', handleGlobalClick, true);
     };
+    tippyCleanupRef.current = cleanup;
+
+    return cleanup;
   }, [editor]);
 
   if (!currentTab) return null;
@@ -1280,6 +1604,13 @@ useEffect(() => {
           >
             <Search size={15}/>
           </button>
+          <button
+            className={`icon-btn sm ${zenMode ? 'is-active' : ''}`}
+            title="Zen Mode (⌘⇧Z)"
+            onClick={() => useStore.getState().setZenMode(!zenMode)}
+          >
+            <Focus size={15} />
+          </button>
           <button className="icon-btn sm" title="More options"><MoreHorizontal size={16}/></button>
         </div>
       </div>
@@ -1316,13 +1647,22 @@ useEffect(() => {
         }}
       >
         <div
-          className={`editor-body${isDragOver ? ' drag-over' : ''}`}
+          className={`editor-body${isDragOver ? ' drag-over' : ''}${isImporting ? ' importing' : ''}${auraClass ? ' ' + auraClass : ''}${isTopSecret ? ' topsecret-blur' : ''}`}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onContextMenu={handleContextMenu}
         >
-          <div className="note-title">{fileName}</div>
+          {isImporting && (
+            <div className="import-overlay">
+              <div className="import-spinner" />
+              <span>Importing media…</span>
+            </div>
+          )}
+          {stampLabel && (
+            <div key={stampLabel} className="note-stamp" data-stamp={stampLabel}>{stampLabel}</div>
+          )}
+          <div className="note-title">{isTopSecret ? `🔒 ${fileName}` : fileName}</div>
           <EditorContent editor={editor} />
           
           {(backlinksFiles.length > 0 || unlinkedMentions.length > 0) && (
@@ -1390,6 +1730,18 @@ useEffect(() => {
         />
       )}
 
+      {/* ── Combo widget ── */}
+      {zenMode && comboCount >= 5 && (() => {
+        const tier = comboCount >= 100 ? 'supernova' : comboCount >= 50 ? 'flame' : 'spark';
+        const label = tier === 'supernova' ? '🌟 SUPERNOVA' : tier === 'flame' ? '🔥 FLAME' : '✨ SPARK';
+        return (
+          <div className={`combo-widget ${tier}`}>
+            <span className="combo-count">{comboCount}</span>
+            <span className="combo-label">{label}</span>
+          </div>
+        );
+      })()}
+
       {/* ── Media context menu ── */}
       {ctxMenu && (
         <div
@@ -1404,6 +1756,50 @@ useEffect(() => {
             <Trash2 size={13} />
             Delete
           </button>
+        </div>
+      )}
+
+      {/* ── Table context menu ── */}
+      {tableCtxMenu && (
+        <div
+          className="table-ctx-menu"
+          style={{ top: tableCtxMenu.y, left: tableCtxMenu.x }}
+          onMouseDown={e => e.stopPropagation()}
+        >
+          <div className="table-ctx-section">
+            <span className="table-ctx-label">Row</span>
+            <button className="table-ctx-item" onClick={() => runTableCommand(() => editor?.chain().focus().addRowBefore().run())}>
+              <ChevronUp size={12}/> Add Above
+            </button>
+            <button className="table-ctx-item" onClick={() => runTableCommand(() => editor?.chain().focus().addRowAfter().run())}>
+              <ChevronDown size={12}/> Add Below
+            </button>
+            <button className="table-ctx-item table-ctx-delete" onClick={() => runTableCommand(() => editor?.chain().focus().deleteRow().run())}>
+              <Trash size={12}/> Delete
+            </button>
+          </div>
+          <div className="table-ctx-divider" />
+          <div className="table-ctx-section">
+            <span className="table-ctx-label">Column</span>
+            <button className="table-ctx-item" onClick={() => runTableCommand(() => editor?.chain().focus().addColumnBefore().run())}>
+              <ChevronLeft size={12}/> Add Left
+            </button>
+            <button className="table-ctx-item" onClick={() => runTableCommand(() => editor?.chain().focus().addColumnAfter().run())}>
+              <ChevronRight size={12}/> Add Right
+            </button>
+            <button className="table-ctx-item table-ctx-delete" onClick={() => runTableCommand(() => editor?.chain().focus().deleteColumn().run())}>
+              <Trash size={12}/> Delete
+            </button>
+          </div>
+          <div className="table-ctx-divider" />
+          <div className="table-ctx-section">
+            <button className="table-ctx-item" onClick={() => runTableCommand(() => editor?.chain().focus().toggleHeaderRow().run())}>
+              Toggle Header
+            </button>
+            <button className="table-ctx-item table-ctx-delete" onClick={() => runTableCommand(() => editor?.chain().focus().deleteTable().run())}>
+              <Trash2 size={12}/> Delete Table
+            </button>
+          </div>
         </div>
       )}
     </div>

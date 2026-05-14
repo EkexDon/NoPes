@@ -7,31 +7,60 @@ import { JournalView } from './components/JournalView';
 import { useStore } from './store/useStore';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import {
+import { 
   FileText, Share2, Search, Settings,
   PanelLeftClose, PanelLeftOpen, Plus, X,
-  Shield, Palette, Keyboard, CalendarDays, Bot, Kanban
+  Shield, Palette, Keyboard, CalendarDays, Bot, Kanban,
+  Home, ChevronRight, Folder, LayoutGrid
 } from 'lucide-react';
 import { useKBar } from 'kbar';
 import { Toaster } from 'react-hot-toast';
 import { VaultChat } from './components/VaultChat';
 import { CanvasView } from './components/CanvasView';
 import { KanbanView } from './components/KanbanView';
+import { HomeView } from './components/HomeView';
 
 /* ─── Error Boundary ─────────────────────────────────────── */
-class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
-  constructor(props: any) { super(props); this.state = { hasError: false, error: null }; }
-  static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
-  componentDidCatch(error: Error, errorInfo: any) { console.error('ErrorBoundary caught:', error, errorInfo); }
+const MAX_AUTO_RETRIES = 2;
+class ErrorBoundary extends React.Component<
+  {children: React.ReactNode},
+  {hasError: boolean, error: Error | null, retryCount: number, crashTime: string | null}
+> {
+  constructor(props: any) { super(props); this.state = { hasError: false, error: null, retryCount: 0, crashTime: null }; }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error, crashTime: new Date().toISOString() };
+  }
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error(`[NoPes:ErrorBoundary] Crash #${this.state.retryCount + 1} at ${new Date().toISOString()}`, error, errorInfo);
+    // Auto-retry on first crash (transient Strict-Mode race conditions, etc.)
+    if (this.state.retryCount < MAX_AUTO_RETRIES) {
+      const delay = 1500 * (this.state.retryCount + 1); // exponential-ish backoff
+      console.warn(`[NoPes:ErrorBoundary] Auto-retry in ${delay}ms...`);
+      setTimeout(() => {
+        this.setState(prev => ({ hasError: false, error: null, retryCount: prev.retryCount + 1 }));
+      }, delay);
+    }
+  }
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '40px', background: 'var(--bg-0)', color: 'var(--tx-1)', height: '100vh', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <h2>Whoops, Nopes crashed! (The Black Screen)</h2>
-          <pre style={{ background: '#300', padding: '16px', borderRadius: '4px', overflow: 'auto', fontSize: '13px' }}>
+        <div style={{ padding: '40px', background: 'var(--bg-0, #1a1a2e)', color: 'var(--tx-1, #e8e8e8)', height: '100vh', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <h2 style={{ margin: 0 }}>Whoops — NoPes ran into a problem</h2>
+          <div style={{ fontSize: '13px', color: 'var(--tx-3, #888)' }}>
+            {this.state.retryCount < MAX_AUTO_RETRIES
+              ? `Auto-recovering (attempt ${this.state.retryCount + 1}/${MAX_AUTO_RETRIES})…`
+              : `Recovery failed after ${MAX_AUTO_RETRIES} attempts. The error is shown below.`
+            }
+          </div>
+          <pre style={{ background: 'rgba(180,30,30,0.15)', padding: '16px', borderRadius: '8px', overflow: 'auto', fontSize: '12px', lineHeight: '1.6', border: '1px solid rgba(255,60,60,0.2)', maxHeight: '40vh' }}>
+            <strong>Time:</strong> {this.state.crashTime}{'\n'}
+            <strong>Attempt:</strong> {this.state.retryCount}/{MAX_AUTO_RETRIES}{'\n\n'}
             {this.state.error?.stack || this.state.error?.message}
           </pre>
-          <button onClick={() => window.location.reload()} style={{ padding: '8px 16px', borderRadius: '4px', background: 'var(--accent)', alignSelf: 'flex-start', color: '#fff' }}>Reload Application</button>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button onClick={() => this.setState({ hasError: false, error: null })} style={{ padding: '8px 20px', borderRadius: '6px', background: 'var(--accent, #7c6dff)', color: '#fff', fontWeight: 600, border: 'none', cursor: 'pointer' }}>Try Again</button>
+            <button onClick={() => window.location.reload()} style={{ padding: '8px 20px', borderRadius: '6px', background: 'var(--bg-3, #333)', color: 'var(--tx-1, #e8e8e8)', fontWeight: 600, border: '1px solid var(--bd-1, #444)', cursor: 'pointer' }}>Hard Reload</button>
+          </div>
         </div>
       );
     }
@@ -45,7 +74,11 @@ type SettingsTab = 'general' | 'appearance' | 'hotkeys';
 const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { vaultPath } = useStore();
   const [tab, setTab] = useState<SettingsTab>('general');
-  const [stats, setStats] = useState({ app: '—', ollama: '—' });
+  const [stats, setStats] = useState({ app: '—', webview: '—', ollama: '—' });
+
+  const formatMb = (mb: number) => (
+    mb > 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb + ' MB'
+  );
 
   useEffect(() => {
     const fetch = async () => {
@@ -53,8 +86,9 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         const { invoke } = await import('@tauri-apps/api/core');
         const res: any = await invoke('get_system_stats');
         setStats({ 
-          app: res.app_mb > 1024 ? (res.app_mb / 1024).toFixed(1) + ' GB' : res.app_mb + ' MB',
-          ollama: res.ollama_mb > 1024 ? (res.ollama_mb / 1024).toFixed(1) + ' GB' : res.ollama_mb + ' MB'
+          app: formatMb(res.app_mb ?? 0),
+          webview: formatMb(res.webview_mb ?? 0),
+          ollama: formatMb(res.ollama_mb ?? 0)
         });
       } catch {}
     };
@@ -123,14 +157,15 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 </label>
               </div>
 
-              <div style={{ marginTop: '24px', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--bd-1)' }}>
-                <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: '12px', letterSpacing: '0.05em', fontWeight: 600 }}>System Resources</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <ResourceStat label="App + Webview" value={stats.app} />
+                <div style={{ marginTop: '24px', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--bd-1)' }}>
+                  <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: '12px', letterSpacing: '0.05em', fontWeight: 600 }}>System Resources</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                  <ResourceStat label="App Process" value={stats.app} />
+                  <ResourceStat label="Nopes WebView" value={stats.webview} />
                   <ResourceStat label="Ollama Service" value={stats.ollama} />
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--tx-3)', marginTop: '12px', fontStyle: 'italic' }}>
-                  * AI Worker automatically kills itself after 5 mins of inactivity.
+                  * WebView stat is scoped to Nopes-owned WebKit cache users.
                 </div>
               </div>
             </>
@@ -220,6 +255,9 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
   return (
     <div className="icon-sidebar">
       <div className="icon-dock-group">
+        <button className={`icon-btn ${viewMode === 'home' ? 'active' : ''}`} onClick={() => setViewMode('home')} title="Home (⌘H)">
+          <Home size={18} />
+        </button>
         <button className={`icon-btn ${viewMode === 'editor' ? 'active' : ''}`} onClick={() => setViewMode('editor')} title="Editor">
           <FileText size={18} />
         </button>
@@ -282,12 +320,88 @@ const EmptyState: React.FC = () => (
   </div>
 );
 
+/* ─── Breadcrumb Navigation ────────────────────────────── */
+const Breadcrumb: React.FC<{ 
+  vaultPath: string | null; 
+  activeTab: string | null;
+  viewMode: string;
+  onNavigate: (path: 'home' | 'vault') => void;
+}> = ({ vaultPath, activeTab, viewMode, onNavigate }) => {
+  if (!vaultPath) return null;
+  
+  const vaultName = vaultPath.split(/[\\/]/).pop() || 'Vault';
+  
+  // Build path segments from activeTab
+  const getPathSegments = () => {
+    if (!activeTab) return [];
+    const relativePath = activeTab.replace(vaultPath, '').replace(/^[/\\]/, '');
+    if (!relativePath) return [];
+    return relativePath.split(/[\\/]/);
+  };
+  
+  const segments = getPathSegments();
+  
+  return (
+    <div className="breadcrumb-bar">
+      <button 
+        className={`breadcrumb-item ${viewMode === 'home' ? 'active' : ''}`}
+        onClick={() => onNavigate('home')}
+      >
+        <Home size={14} />
+        <span>Home</span>
+      </button>
+      
+      <ChevronRight size={14} className="breadcrumb-separator" />
+      
+      <button 
+        className={`breadcrumb-item ${viewMode !== 'home' && !activeTab ? 'active' : ''}`}
+        onClick={() => onNavigate('vault')}
+      >
+        <Folder size={14} />
+        <span>{vaultName}</span>
+      </button>
+      
+      {segments.length > 0 && segments.map((segment, idx) => (
+        <React.Fragment key={idx}>
+          <ChevronRight size={14} className="breadcrumb-separator" />
+          <span className={`breadcrumb-item ${idx === segments.length - 1 ? 'active' : ''}`}>
+            {idx === segments.length - 1 && viewMode !== 'editor' && (
+              <>
+                {viewMode === 'canvas' && <LayoutGrid size={14} />}
+                {viewMode === 'kanban' && <Kanban size={14} />}
+                {viewMode === 'graph' && <Share2 size={14} />}
+                {viewMode === 'journal' && <CalendarDays size={14} />}
+                {viewMode === 'editor' && <FileText size={14} />}
+              </>
+            )}
+            {idx === segments.length - 1 ? (
+              <span>{segment.replace(/\.md$/, '')}</span>
+            ) : (
+              <span>{segment}</span>
+            )}
+          </span>
+        </React.Fragment>
+      ))}
+      
+      {activeTab && segments.length === 0 && (
+        <>
+          <ChevronRight size={14} className="breadcrumb-separator" />
+          <span className="breadcrumb-item active">
+            <FileText size={14} />
+            <span>{activeTab.split(/[\\/]/).pop()?.replace(/\.md$/, '')}</span>
+          </span>
+        </>
+      )}
+    </div>
+  );
+};
+
 /* ─── App Root ───────────────────────────────────────────── */
 const App: React.FC = () => {
   const { 
     vaultPath, setVaultPath, activeTab, viewMode, isSidebarOpen, setSidebarOpen, 
     setViewMode, createFile, closeTab, loadGraphData, loadFiles, importFiles,
-    isSplitView, rightActiveTab, rightViewMode
+    isSplitView, rightActiveTab, rightViewMode, zenMode, setZenMode
   } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -328,13 +442,15 @@ const App: React.FC = () => {
     if (vaultPath) {
       loadFiles();
       loadGraphData();
+      // Set default view to Home when vault opens
+      setViewMode('home');
     }
     // Manage AI process based on setting
     const { isAiEnabled } = useStore.getState();
     import('@tauri-apps/api/core').then(m => {
       m.invoke('manage_ollama', { active: isAiEnabled }).catch(console.error);
     });
-  }, [vaultPath, loadFiles, loadGraphData]);
+  }, [vaultPath, loadFiles, loadGraphData, setViewMode]);
 
   const handleOpenVault = useCallback(async () => {
     const selected = await open({ directory: true, multiple: false });
@@ -351,13 +467,15 @@ const App: React.FC = () => {
         case 'g': e.preventDefault(); setViewMode('graph'); break;
         case 'j': e.preventDefault(); setViewMode('journal'); break;
         case 'm': e.preventDefault(); setViewMode('kanban'); break;
+        case 'h': e.preventDefault(); setViewMode('home'); break;
         case 'n': e.preventDefault(); createFile('Untitled'); break;
         case 'w': e.preventDefault(); if (activeTab) closeTab(activeTab); break;
+        case 'z': if (e.shiftKey) { e.preventDefault(); setZenMode(!zenMode); } break;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isSidebarOpen, activeTab, setSidebarOpen, setViewMode, createFile, closeTab]);
+  }, [isSidebarOpen, activeTab, setSidebarOpen, setViewMode, createFile, closeTab, zenMode, setZenMode]);
 
   useEffect(() => {
     if (viewMode === 'graph') loadGraphData();
@@ -396,7 +514,7 @@ const App: React.FC = () => {
             fontSize: '0.85rem'
           } 
         }} />
-        <div className="app-container">
+        <div className={`app-container ${zenMode ? 'zen-mode-active' : ''}`}>
           <IconDock onSettings={() => setSettingsOpen(true)} />
           {vaultPath && isSidebarOpen && <Sidebar />}
           <main className="main-content" ref={containerRef} style={{ display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
@@ -406,14 +524,26 @@ const App: React.FC = () => {
               <>
                 {/* Left Pane */}
                 <div style={{ flex: isSplitView ? `0 0 ${leftWidth}%` : 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                  {/* Breadcrumb Navigation */}
+                  <Breadcrumb 
+                    vaultPath={vaultPath}
+                    activeTab={activeTab}
+                    viewMode={viewMode}
+                    onNavigate={(target) => {
+                      if (target === 'home') setViewMode('home');
+                      else setViewMode('editor');
+                    }}
+                  />
+                  
                   { viewMode === 'graph' ? <GraphView /> :
                     viewMode === 'journal' ? <JournalView /> :
                     viewMode === 'canvas' ? <CanvasView /> :
                     viewMode === 'kanban' ? <KanbanView /> :
+                    viewMode === 'home' ? <HomeView /> :
                     (
                       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                         <TabBar />
-                        {activeTab ? <NoteEditor tabId={activeTab} /> : <EmptyState />}
+                        {activeTab ? <NoteEditor key={activeTab} tabId={activeTab} /> : <EmptyState />}
                       </div>
                     )
                   }
@@ -443,7 +573,7 @@ const App: React.FC = () => {
                       rightViewMode === 'canvas' ? <CanvasView /> :
                       rightViewMode === 'kanban' ? <KanbanView /> :
                       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                        {rightActiveTab ? <NoteEditor tabId={rightActiveTab} /> : <EmptyState />}
+                        {rightActiveTab ? <NoteEditor key={rightActiveTab} tabId={rightActiveTab} /> : <EmptyState />}
                       </div>
                     }
                   </div>

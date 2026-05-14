@@ -4,8 +4,9 @@ import {
   KBarAnimator, KBarSearch, KBarResults, useMatches, useRegisterActions, useKBar
 } from 'kbar';
 import { useStore } from '../store/useStore';
-import { FileText, Plus, Share2, Sparkles } from 'lucide-react';
+import { FileText, Plus, Share2, Sparkles, Search, LayoutTemplate } from 'lucide-react';
 import { AIService } from '../workers/AIService';
+import Fuse from 'fuse.js';
 
 /* ─── Result Renderer ────────────────────────────────────── */
 const Results: React.FC = () => {
@@ -75,8 +76,8 @@ const SemanticResults: React.FC<{
 };
 
 /* ─── AI Status Badge ────────────────────────────────────── */
-const AIBadge: React.FC<{ status: string }> = ({ status }) => {
-  if (status === 'ready') return null;
+const AIBadge: React.FC<{ status: string; enabled: boolean }> = ({ status, enabled }) => {
+  if (!enabled || status === 'ready') return null;
   return (
     <div className="ai-badge">
       {status === 'loading' ? (
@@ -88,23 +89,113 @@ const AIBadge: React.FC<{ status: string }> = ({ status }) => {
   );
 };
 
+/* ─── Full-Text Search Results ───────────────────────────── */
+const FullTextSearchResults: React.FC<{
+  results: { path: string; label: string; matches: string[]; score: number }[];
+  onPick: (path: string) => void;
+}> = ({ results, onPick }) => {
+  if (!results.length) return null;
+  return (
+    <div className="semantic-results">
+      <div className="kbar-section-header">
+        <Search size={11} style={{ marginRight: 5, color: 'var(--accent)' }} />
+        Content Matches
+      </div>
+      {results.map(r => (
+        <div
+          key={r.path}
+          className="kbar-result-item semantic-item"
+          onClick={() => onPick(r.path)}
+        >
+          <div className="kbar-result-left">
+            <span className="kbar-result-icon semantic-icon">
+              <FileText size={14} />
+            </span>
+            <div className="kbar-result-text">
+              <span className="kbar-result-name">{r.label}</span>
+              <span className="kbar-result-sub">
+                {r.matches.slice(0, 2).join(' ... ')}
+              </span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/* ─── Template Results ─────────────────────────────────── */
+const TemplateResults: React.FC<{
+  templates: { id: string; name: string; category: string }[];
+  onPick: (id: string) => void;
+}> = ({ templates, onPick }) => {
+  if (!templates.length) return null;
+  return (
+    <div className="semantic-results">
+      <div className="kbar-section-header">
+        <LayoutTemplate size={11} style={{ marginRight: 5, color: 'var(--accent)' }} />
+        Templates
+      </div>
+      {templates.map(t => (
+        <div
+          key={t.id}
+          className="kbar-result-item semantic-item"
+          onClick={() => onPick(t.id)}
+        >
+          <div className="kbar-result-left">
+            <span className="kbar-result-icon semantic-icon">
+              <LayoutTemplate size={14} />
+            </span>
+            <div className="kbar-result-text">
+              <span className="kbar-result-name">{t.name}</span>
+              <span className="kbar-result-sub">{t.category}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 /* ─── CommandBar Content ─────────────────────────────────── */
 const CommandBarContent: React.FC = () => {
-  const { allFiles, openFile, setViewMode, createFile, aiIndex } = useStore();
+  const { allFiles, openFile, setViewMode, createFile, createFileFromTemplate, aiIndex, isAiEnabled, templates, buildSearchIndex, searchIndex } = useStore();
   const { query } = useKBar();
   const [aiStatus, setAiStatus]           = useState<string>('idle');
   const [semanticHits, setSemanticHits]   = useState<{ path: string; label: string; score: number }[]>([]);
+  const [fullTextHits, setFullTextHits]   = useState<{ path: string; label: string; matches: string[]; score: number }[]>([]);
+  const [templateHits, setTemplateHits]   = useState<{ id: string; name: string; category: string }[]>([]);
+  const [showNewNoteModal, setShowNewNoteModal] = useState(false);
+  const [newNoteName, setNewNoteName] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const searchDebounce                    = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const lastQuery                         = useRef('');
+  const fuseRef                           = useRef<Fuse<{ path: string; content: string }> | null>(null);
 
-  // Bootstrap AI engine once
+  // Build search index on mount
+  useEffect(() => {
+    buildSearchIndex();
+  }, [buildSearchIndex]);
+
+  // Initialize Fuse when searchIndex changes
+  useEffect(() => {
+    if (searchIndex.size === 0) return;
+    const docs = Array.from(searchIndex.entries()).map(([path, content]) => ({ path, content }));
+    fuseRef.current = new Fuse(docs, {
+      keys: ['content'],
+      threshold: 0.3,
+      includeMatches: true,
+      distance: 100,
+    });
+  }, [searchIndex]);
+
+  // Track worker status, but keep model lazy to avoid idle memory usage.
   useEffect(() => {
     const unsub = AIService.onStatus(setAiStatus);
-    AIService.init().catch(console.error);
     return unsub;
   }, []);
 
-  // Listen to kbar query changes and run semantic search
+  // Listen to kbar query changes and run searches
   useEffect(() => {
     const el = document.querySelector('.kbar-search') as HTMLInputElement | null;
     if (!el) return;
@@ -113,10 +204,46 @@ const CommandBarContent: React.FC = () => {
       if (q === lastQuery.current) return;
       lastQuery.current = q;
       if (searchDebounce.current !== undefined) clearTimeout(searchDebounce.current);
-      if (q.length < 3 || aiStatus !== 'ready' || !aiIndex.length) {
+
+      // Full-text search with Fuse
+      if (q.length >= 2 && fuseRef.current) {
+        const fuseResults = fuseRef.current.search(q, { limit: 5 });
+        const hits = fuseResults.map(r => {
+          const path = r.item.path;
+          const label = path.split(/[\\/]/).pop()?.replace(/\.md$/, '') ?? 'Note';
+          const matches = r.matches?.[0]?.indices?.slice(0, 3).map(([start, end]: [number, number]) => {
+            const snippetStart = Math.max(0, start - 30);
+            const snippetEnd = Math.min(r.item.content.length, end + 30);
+            return '...' + r.item.content.slice(snippetStart, snippetEnd) + '...';
+          }) || [];
+          return { path, label, matches, score: r.score! };
+        });
+        setFullTextHits(hits);
+      } else {
+        setFullTextHits([]);
+      }
+
+      // Template search
+      if (q.length >= 1) {
+        const templateMatches = templates.filter(t =>
+          t.name.toLowerCase().includes(q.toLowerCase()) ||
+          t.category.toLowerCase().includes(q.toLowerCase())
+        ).slice(0, 5);
+        setTemplateHits(templateMatches);
+      } else {
+        setTemplateHits([]);
+      }
+
+      // AI semantic search
+      if (q.length < 3 || !isAiEnabled || !aiIndex.length) {
         setSemanticHits([]);
         return;
       }
+      if (aiStatus === 'idle') {
+        AIService.init().catch(console.error);
+        return;
+      }
+      if (aiStatus !== 'ready') return;
       searchDebounce.current = setTimeout(async () => {
         try {
           const qVec  = await AIService.embedQuery(q);
@@ -127,7 +254,7 @@ const CommandBarContent: React.FC = () => {
     };
     el.addEventListener('input', handler);
     return () => { el.removeEventListener('input', handler); if (searchDebounce.current !== undefined) clearTimeout(searchDebounce.current); };
-  }, [aiStatus, aiIndex]);
+  }, [aiStatus, aiIndex, isAiEnabled, templates, searchIndex]);
 
   const actions = useMemo(() => {
     const fileActions = allFiles
@@ -147,6 +274,7 @@ const CommandBarContent: React.FC = () => {
 
     return [
       { id: 'new-note',    name: 'New Note',        shortcut: ['n'], keywords: 'create new note', section: 'Actions', perform: () => createFile('Untitled'), icon: <Plus size={16} /> },
+      { id: 'new-from-template', name: 'New from Template', shortcut: ['t'], keywords: 'template', section: 'Actions', perform: () => setShowNewNoteModal(true), icon: <LayoutTemplate size={16} /> },
       { id: 'graph-view',  name: 'Open Graph View', shortcut: ['g'], keywords: 'graph',            section: 'Actions', perform: () => setViewMode('graph'),    icon: <Share2 size={16} /> },
       ...fileActions,
     ];
@@ -154,25 +282,84 @@ const CommandBarContent: React.FC = () => {
 
   useRegisterActions(actions, [actions]);
 
+  const handleCreateFromTemplate = () => {
+    if (!newNoteName.trim()) return;
+    if (selectedTemplateId) {
+      createFileFromTemplate(newNoteName, selectedTemplateId);
+    } else {
+      createFile(newNoteName);
+    }
+    setShowNewNoteModal(false);
+    setNewNoteName('');
+    setSelectedTemplateId('');
+    query.toggle();
+  };
+
   return (
-    <KBarPortal>
-      <KBarPositioner className="kbar-positioner">
-        <KBarAnimator className="kbar-animator">
-          <div className="kbar-search-row">
-            <Search16 />
-            <KBarSearch className="kbar-search" defaultPlaceholder="Search notes or type a command…" />
+    <>
+      <KBarPortal>
+        <KBarPositioner className="kbar-positioner">
+          <KBarAnimator className="kbar-animator">
+            <div className="kbar-search-row">
+              <Search16 />
+              <KBarSearch className="kbar-search" defaultPlaceholder="Search notes, content, or templates…" />
+            </div>
+            <AIBadge status={aiStatus} enabled={isAiEnabled && aiIndex.length > 0} />
+            <FullTextSearchResults
+              results={fullTextHits}
+              onPick={path => { openFile(path); setViewMode('editor'); query.toggle(); setFullTextHits([]); }}
+            />
+            <TemplateResults
+              templates={templateHits}
+              onPick={id => {
+                setShowNewNoteModal(true);
+                setSelectedTemplateId(id);
+              }}
+            />
+            <SemanticResults
+              results={semanticHits}
+              onPick={path => { openFile(path); setViewMode('editor'); query.toggle(); setSemanticHits([]); }}
+            />
+            <div className="kbar-results-wrapper">
+              <Results />
+            </div>
+          </KBarAnimator>
+        </KBarPositioner>
+      </KBarPortal>
+
+      {showNewNoteModal && (
+        <div className="modal-overlay" onClick={() => setShowNewNoteModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-title">Create New Note</div>
+            <label className="modal-label">Note Name</label>
+            <input
+              className="modal-input"
+              value={newNoteName}
+              onChange={e => setNewNoteName(e.target.value)}
+              placeholder="e.g., Meeting Notes"
+              autoFocus
+            />
+            <label className="modal-label">Template (optional)</label>
+            <select
+              className="modal-input"
+              value={selectedTemplateId}
+              onChange={e => setSelectedTemplateId(e.target.value)}
+            >
+              <option value="">None (blank note)</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name} ({t.category})</option>
+              ))}
+            </select>
+            <div className="modal-actions">
+              <button className="modal-btn" onClick={() => setShowNewNoteModal(false)}>Cancel</button>
+              <button className="modal-btn primary" onClick={handleCreateFromTemplate} disabled={!newNoteName.trim()}>
+                Create
+              </button>
+            </div>
           </div>
-          <AIBadge status={aiStatus} />
-          <SemanticResults
-            results={semanticHits}
-            onPick={path => { openFile(path); setViewMode('editor'); query.toggle(); setSemanticHits([]); }}
-          />
-          <div className="kbar-results-wrapper">
-            <Results />
-          </div>
-        </KBarAnimator>
-      </KBarPositioner>
-    </KBarPortal>
+        </div>
+      )}
+    </>
   );
 };
 

@@ -9,6 +9,8 @@ let pendingCallbacks: Map<string, { resolve: (v: any) => void; reject: (e: any) 
 let statusListeners: ((status: 'idle' | 'loading' | 'ready' | 'error') => void)[] = [];
 let progressListeners: ((done: number, total: number) => void)[] = [];
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
+let syncedIndexRef: { path: string; label: string; vec: Float32Array }[] | null = null;
+let initPromise: Promise<void> | null = null;
 const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 
 function resetIdleTimer() {
@@ -23,6 +25,7 @@ function getWorker(): Worker {
   if (!worker) {
     console.log('[AIService] Spawning AI worker...');
     worker = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
+    syncedIndexRef = null;
     worker.onmessage = (e: MessageEvent) => {
       const { type, id } = e.data;
       if (type === 'STATUS') {
@@ -42,6 +45,12 @@ function getWorker(): Worker {
     };
   }
   return worker;
+}
+
+async function syncSearchIndex(index: { path: string; label: string; vec: Float32Array }[]): Promise<void> {
+  if (syncedIndexRef === index) return;
+  await call({ type: 'SET_INDEX', index });
+  syncedIndexRef = index;
 }
 
 function call<T>(msg: object, transfer?: Transferable[]): Promise<T> {
@@ -70,7 +79,12 @@ export const AIService = {
   },
 
   async init(): Promise<void> {
-    await call({ type: 'INIT' });
+    if (!initPromise) {
+      initPromise = call({ type: 'INIT' }).then(() => undefined).finally(() => {
+        initPromise = null;
+      });
+    }
+    await initPromise;
   },
 
   async embedQuery(text: string): Promise<Float32Array> {
@@ -88,8 +102,9 @@ export const AIService = {
     index: { path: string; label: string; vec: Float32Array }[],
     topK = 5,
   ): Promise<{ path: string; label: string; score: number }[]> {
+    await syncSearchIndex(index);
     const res = await call<{ results: { path: string; label: string; score: number }[] }>(
-      { type: 'SEARCH', queryVec, index, topK },
+      { type: 'SEARCH', queryVec, topK },
       [queryVec.buffer],
     );
     return res.results;
@@ -99,6 +114,8 @@ export const AIService = {
     if (worker) {
       worker.terminate();
       worker = null;
+      syncedIndexRef = null;
+      initPromise = null;
       statusListeners.forEach(fn => fn('idle'));
       console.log('[AIService] AI worker terminated.');
     }

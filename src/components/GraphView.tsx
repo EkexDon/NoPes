@@ -15,7 +15,18 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const clickTimeout = useRef<number>(0);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const isMounted = useRef(true);
 
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      const fg: any = ref.current;
+      if (!fg) return;
+      try { fg.pauseAnimation?.(); } catch {}
+      try { fg._destructor?.(); } catch {}
+    };
+  }, []);
   useEffect(() => {
     if (!containerRef.current) return;
     const observer = new ResizeObserver(entries => {
@@ -48,11 +59,14 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
   }, [graphData, activeTag]);
 
   useEffect(() => {
-    if (!ref.current) return;
+    if (!ref.current || !isMounted.current) return;
     // d3Force('name') returns the force; then we configure it
-    const charge = ref.current.d3Force('charge');
+    const fg = ref.current;
+    if (typeof fg.d3Force !== 'function') return;
+
+    const charge = fg.d3Force('charge');
     if (charge) charge.strength(isMini ? -60 : -200);
-    const link = ref.current.d3Force('link');
+    const link = fg.d3Force('link');
     if (link) link.distance(isMini ? 40 : 100);
   }, [isMini, ref.current]);
 
