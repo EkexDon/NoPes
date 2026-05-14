@@ -739,7 +739,8 @@ This is a canvas board.
       
       await get().loadFiles();
       await get().openFile(newPath);
-      get().setViewMode('canvas');
+      // Small delay to ensure openFile state update completes before setting viewMode
+      setTimeout(() => get().setViewMode('canvas'), 50);
       toast.success('Canvas created');
     } catch (e) { console.error('createCanvasFile error:', e); }
   },
@@ -775,7 +776,8 @@ This is a canvas board.
       
       await get().loadFiles();
       await get().openFile(newPath);
-      get().setViewMode('kanban');
+      // Small delay to ensure openFile state update completes before setting viewMode
+      setTimeout(() => get().setViewMode('kanban'), 50);
       toast.success('Kanban board created');
     } catch (e) { console.error('createKanbanFile error:', e); }
   },
