@@ -22,19 +22,45 @@ function parseKanban(markdown: string): KanbanColumn[] {
   // Matches: "- [ ] text", "* [ ] text", "[ ] text", and checked variants
   const checkboxRe = /^(?:[-*]\s+)?\[( |x)\]\s+(.+)$/i;
 
+  // Heading: ## Title OR a line starting with emoji followed by space and text (e.g. "📋 To Do")
+  // Emoji range covers most common emojis
+  const emojiHeadingRe = /^([\p{Emoji_Presentation}\p{Extended_Pictographic}](?:\u200d[\p{Emoji_Presentation}\p{Extended_Pictographic}])*\uFE0F?)\s+(.+)$/u;
+  const mdHeadingRe = /^#{1,6}\s+(.+)$/;
+
   for (const line of lines) {
-    const headingMatch = line.match(/^##\s+(.+)$/);
-    if (headingMatch) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Skip H1 title and HTML comments
+    if (trimmed.startsWith('<!--') || trimmed.startsWith('# ')) continue;
+
+    // Try markdown heading first (## Title)
+    let headingTitle: string | null = null;
+    const mdMatch = trimmed.match(mdHeadingRe);
+    if (mdMatch) {
+      headingTitle = mdMatch[1].trim();
+    } else {
+      // Try emoji heading (📋 To Do, ✅ Done, etc.) — only if NOT a checkbox
+      const cbCheck = trimmed.match(checkboxRe);
+      if (!cbCheck) {
+        const emojiMatch = trimmed.match(emojiHeadingRe);
+        if (emojiMatch) {
+          headingTitle = `${emojiMatch[1]} ${emojiMatch[2].trim()}`;
+        }
+      }
+    }
+
+    if (headingTitle) {
       currentCol = {
-        id: `col-${headingMatch[1].trim()}`,
-        title: headingMatch[1].trim(),
+        id: `col-${headingTitle}`,
+        title: headingTitle,
         cards: [],
       };
       columns.push(currentCol);
       continue;
     }
 
-    const cbMatch = line.match(checkboxRe);
+    const cbMatch = trimmed.match(checkboxRe);
     if (cbMatch) {
       // If no column yet, auto-create a default one
       if (!currentCol) {
