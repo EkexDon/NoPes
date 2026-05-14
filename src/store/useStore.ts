@@ -830,6 +830,24 @@ This is a canvas board.
         // Use the new filename
         const finalPath = await join(targetDir, newFileName);
         await rename(sourcePath, finalPath);
+
+        // Update tabs if file was open
+        const { tabs, tabContents, activeTab } = get();
+        const wasOpen = tabs.some(t => t.path === sourcePath);
+
+        if (wasOpen) {
+          const newTabs = tabs.map(t =>
+            t.path === sourcePath ? { ...t, path: finalPath, label: newFileName.replace(/\.md$/, '') } : t
+          );
+          const newTabContents = { ...tabContents };
+          if (newTabContents[sourcePath] !== undefined) {
+            newTabContents[finalPath] = newTabContents[sourcePath];
+            delete newTabContents[sourcePath];
+          }
+          const newActive = activeTab === sourcePath ? finalPath : activeTab;
+          set({ tabs: newTabs, tabContents: newTabContents, activeTab: newActive });
+        }
+
         toast.success(`Moved as "${newFileName}"`);
         await get().loadFiles();
         await get().loadGraphData();
