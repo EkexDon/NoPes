@@ -557,19 +557,17 @@ export const useStore = create<AppState>((set, get) => ({
     const label = name.replace(/\.md$/, '') || 'Untitled';
     const alreadyOpen = tabs.some(t => t.path === path);
 
-    // Detect view mode from content markers
+    // Detect view mode from content markers - ONLY explicit markers
     let targetViewMode: ViewMode = 'editor';
     const contentToCheck = content || '';
-    
-    // More robust check - look for markers anywhere in content
-    if (contentToCheck.includes('<!-- CANVAS -->') || 
-        contentToCheck.includes('data-canvas="true"') ||
-        contentToCheck.toLowerCase().includes('canvas')) {
+
+    // Strict check - only explicit HTML markers
+    if (contentToCheck.includes('<!-- CANVAS -->') ||
+        contentToCheck.includes('data-canvas="true"')) {
       targetViewMode = 'canvas';
       console.log(`[openFile] Detected Canvas file: ${path}`);
-    } else if (contentToCheck.includes('<!-- KANBAN -->') || 
-               contentToCheck.includes('data-kanban="true"') ||
-               contentToCheck.toLowerCase().includes('kanban')) {
+    } else if (contentToCheck.includes('<!-- KANBAN -->') ||
+               contentToCheck.includes('data-kanban="true"')) {
       targetViewMode = 'kanban';
       console.log(`[openFile] Detected Kanban file: ${path}`);
     }
