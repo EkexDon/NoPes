@@ -132,26 +132,14 @@ export const KanbanView: React.FC = () => {
   const lastSavedMdRef = useRef<string>(content);
 
   useEffect(() => {
-    console.log('[KanbanView] Effect triggered:', { activeTab, contentLength: content.length, prevTab: prevTabRef.current });
     if (prevTabRef.current !== activeTab) {
       // Different file — always re-parse fresh
-      console.log('[KanbanView] Tab changed, re-parsing');
       prevTabRef.current = activeTab ?? null;
       lastSavedMdRef.current = content;
       const parsed = parseKanban(content);
-      console.log('[KanbanView] Parsed columns:', parsed.length, 'Total cards:', parsed.reduce((acc, c) => acc + c.cards.length, 0));
-      setLocalColumns(parsed);
-      return;
-    }
-    // Same tab — only re-parse if content was changed EXTERNALLY (i.e. by the Editor, not by us)
-    if (content !== lastSavedMdRef.current) {
-      console.log('[KanbanView] Content changed externally, re-parsing');
-      lastSavedMdRef.current = content;
-      const parsed = parseKanban(content);
-      console.log('[KanbanView] Parsed columns:', parsed.length, 'Total cards:', parsed.reduce((acc, c) => acc + c.cards.length, 0));
       setLocalColumns(parsed);
     }
-  }, [activeTab, content]);
+  }, [activeTab]); // Only re-parse when switching tabs, NOT when content changes
 
   const [dragging, setDragging] = useState<{ colId: string; cardId: string } | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
