@@ -126,6 +126,7 @@ interface AppState {
   activeTab: string | null;
   tabContents: Record<string, string>; // path -> content
   tabContentsSize: () => { entries: number; bytes: number };
+  setTabContents: (contents: Record<string, string>) => void;
 
   // Rich Media Assets awaiting insertion into the editor
   pendingAssetInserts: string[];
@@ -421,6 +422,7 @@ export const useStore = create<AppState>((set, get) => ({
       bytes: entries.reduce((acc, k) => acc + (tabContents[k]?.length || 0), 0)
     };
   },
+  setTabContents: (contents) => set({ tabContents: contents }),
   pendingAssetInserts: [],
   media: [],
 

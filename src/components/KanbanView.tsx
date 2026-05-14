@@ -122,14 +122,18 @@ export const KanbanView: React.FC = () => {
   const [activeInsertCol, setActiveInsertCol] = useState<string | null>(null);
   const [newCardText, setNewCardText] = useState('');
 
+  const { setTabContents } = useStore.getState();
+
   const persist = useCallback(
     (cols: KanbanColumn[]) => {
       if (!activeTab) return;
       const newMd = fullRebuildMarkdown(content, cols);
       lastSavedMdRef.current = newMd; // mark as our own write so sync doesn't re-parse
+      // Update both disk and memory
       saveFile(activeTab, newMd);
+      setTabContents({ ...tabContents, [activeTab]: newMd });
     },
-    [activeTab, content, saveFile]
+    [activeTab, content, saveFile, tabContents, setTabContents]
   );
 
   const handleDrop = (targetColId: string) => {
