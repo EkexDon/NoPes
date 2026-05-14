@@ -2867,13 +2867,14 @@ input:checked + .nopes-slider:before {
   align-items: center;
   gap: 12px;
   padding: 8px 0;
+  overflow: hidden;
 }
 
 .pet-avatar-img {
   width: 64px;
   height: 64px;
-  object-fit: contain;
-  object-position: center bottom;
+  object-fit: cover;
+  object-position: left center;
   animation: petBounce 3s infinite ease-in-out;
   transform-origin: bottom center;
   filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));
