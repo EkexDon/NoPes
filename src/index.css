@@ -2858,6 +2858,8 @@ input:checked + .nopes-slider:before {
   color: var(--tx-3);
   letter-spacing: 0.5px;
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .pet-avatar-container {
