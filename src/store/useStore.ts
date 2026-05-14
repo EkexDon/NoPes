@@ -170,6 +170,7 @@ interface AppState {
   saveTemplate: (template: Omit<NoteTemplate, 'id' | 'createdAt'>) => void;
   deleteTemplate: (id: string) => void;
   createFileFromTemplate: (name: string, templateId: string, folderPath?: string) => Promise<void>;
+  insertTemplate: (templateId: string) => void;
 
   // Full-text search index
   searchIndex: Map<string, string>; // path -> content for search
@@ -696,6 +697,24 @@ export const useStore = create<AppState>((set, get) => ({
       if (noteCount >= 50) get().unlockAchievement('librarian-50', 'Librarian');
       toast.success(`Created from template "${template.name}"`);
     } catch (e) { console.error('createFileFromTemplate error:', e); }
+  },
+
+  insertTemplate: (templateId) => {
+    const { templates, activeTab, tabContents } = get();
+    if (!activeTab) {
+      toast.error('No active file to insert template');
+      return;
+    }
+    const template = templates.find(t => t.id === templateId);
+    if (!template) {
+      toast.error('Template not found');
+      return;
+    }
+    const currentContent = tabContents[activeTab] ?? '';
+    // Insert at end with a newline separator
+    const newContent = currentContent + (currentContent ? '\n\n' : '') + template.content;
+    set({ tabContents: { ...tabContents, [activeTab]: newContent } });
+    toast.success(`Template "${template.name}" inserted`);
   },
 
   createCanvasFile: async (name, folderPath) => {

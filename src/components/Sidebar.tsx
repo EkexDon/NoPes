@@ -311,7 +311,7 @@ const DigitalPet: React.FC = () => {
 
 /* ─── Template Manager ─────────────────────────────────── */
 const TemplateManager: React.FC = () => {
-  const { templates, saveTemplate, deleteTemplate, tabContents, activeTab } = useStore();
+  const { templates, saveTemplate, deleteTemplate, insertTemplate, tabContents, activeTab } = useStore();
   const [isOpen, setIsOpen] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [templateName, setTemplateName] = useState('');
@@ -357,6 +357,14 @@ const TemplateManager: React.FC = () => {
               <div key={t.id} className="template-item">
                 <span className="template-name">{t.name}</span>
                 <span className="template-category">{t.category}</span>
+                <button 
+                  className="template-insert" 
+                  onClick={() => insertTemplate(t.id)}
+                  title="Insert template into current note"
+                  disabled={!activeTab}
+                >
+                  Use
+                </button>
                 <button 
                   className="template-delete" 
                   onClick={() => deleteTemplate(t.id)}
