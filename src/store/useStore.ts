@@ -819,13 +819,21 @@ This is a canvas board.
       // Check if target already exists
       const targetExists = await exists(newPath);
       if (targetExists) {
-        const shouldOverwrite = window.confirm(
-          `A file named "${fileName}" already exists in this folder.\n\nDo you want to overwrite it?\n\nWarning: This will replace the existing file.`
+        const newFileName = window.prompt(
+          `A file named "${fileName}" already exists in this folder.\n\nPlease enter a new name:`,
+          fileName
         );
-        if (!shouldOverwrite) {
+        if (!newFileName || newFileName === fileName) {
           toast.error('Move cancelled');
           return;
         }
+        // Use the new filename
+        const finalPath = await join(targetDir, newFileName);
+        await rename(sourcePath, finalPath);
+        toast.success(`Moved as "${newFileName}"`);
+        await get().loadFiles();
+        await get().loadGraphData();
+        return;
       }
 
       await rename(sourcePath, newPath);
