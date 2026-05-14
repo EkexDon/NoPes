@@ -79,36 +79,46 @@ function parseKanban(markdown: string): KanbanColumn[] {
 }
 
 function fullRebuildMarkdown(original: string, columns: KanbanColumn[]): string {
+  // Strategy: Keep header (everything before first column heading) + rebuild kanban section
   const lines = original.split('\n');
-  const output: string[] = [];
-  let insideKanban = false;
+  const checkboxRe = /^(?:[-*]\s+)?\[( |x)\]\s+(.+)$/i;
+  const emojiHeadingRe = /^([\p{Emoji_Presentation}\p{Extended_Pictographic}](?:\u200d[\p{Emoji_Presentation}\p{Extended_Pictographic}])*\uFE0F?)\s+(.+)$/u;
+  const mdHeadingRe = /^#{2,6}\s+(.+)$/;
 
-  for (const line of lines) {
-    const h2 = line.match(/^##\s+(.+)$/);
-    if (h2) {
-      const title = h2[1].trim();
-      const matchedCol = columns.find((c) => c.title.trim() === title);
-      if (matchedCol) {
-        output.push(line);
-        insideKanban = true;
-        for (const card of matchedCol.cards) {
-          output.push(`- [${card.checked ? 'x' : ' '}] ${card.text}`);
-        }
-        continue;
-      } else {
-        insideKanban = false;
-        output.push(line);
-        continue;
-      }
+  // Find the line index where the first column heading starts
+  let firstHeadingIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('<!--') || trimmed.startsWith('# ')) continue;
+
+    if (mdHeadingRe.test(trimmed)) {
+      firstHeadingIdx = i;
+      break;
     }
-    // Skip old checkbox lines inside a kanban section (already rewritten above)
-    if (insideKanban && (line.match(/^- \[ \] /) || line.match(/^- \[x\] /i))) {
-      continue;
+    // Emoji heading - but only if NOT a checkbox
+    if (!checkboxRe.test(trimmed) && emojiHeadingRe.test(trimmed)) {
+      firstHeadingIdx = i;
+      break;
     }
-    output.push(line);
   }
 
-  return output.join('\n');
+  // Header part: everything before first column
+  const header = firstHeadingIdx >= 0
+    ? lines.slice(0, firstHeadingIdx).join('\n').replace(/\n+$/, '')
+    : lines.join('\n').replace(/\n+$/, '');
+
+  // Build kanban section from columns
+  const kanbanLines: string[] = [];
+  for (const col of columns) {
+    kanbanLines.push('');
+    kanbanLines.push(`## ${col.title}`);
+    for (const card of col.cards) {
+      kanbanLines.push(`- [${card.checked ? 'x' : ' '}] ${card.text}`);
+    }
+  }
+
+  return (header + '\n' + kanbanLines.join('\n') + '\n').replace(/\n{3,}/g, '\n\n');
 }
 
 export const KanbanView: React.FC = () => {
