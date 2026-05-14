@@ -206,6 +206,7 @@ interface AppState {
   revealInFinder: (path: string) => Promise<void>;
   copyToClipboard: (text: string) => Promise<void>;
   duplicateFile: (path: string) => Promise<void>;
+  moveItem: (sourcePath: string, targetDir: string) => Promise<void>;
 
   setPendingAssetInserts: (assets: string[]) => void;
   addMedia: (item: MediaItem) => void;
@@ -787,20 +788,59 @@ This is a canvas board.
     try {
       const { readTextFile, writeTextFile } = await import('@tauri-apps/plugin-fs');
       const { basename, join } = await import('@tauri-apps/api/path');
-      
+
       const content = await readTextFile(path);
       const baseName = await basename(path);
       const nameWithoutExt = baseName.replace(/\.md$/, '');
       const newName = `${nameWithoutExt} Copy.md`;
       const dir = path.substring(0, path.lastIndexOf('/') + 1);
       const newPath = await join(dir, newName);
-      
+
       await writeTextFile(newPath, content);
       await get().loadFiles();
       toast.success('File duplicated');
     } catch (e: any) {
       console.error('duplicateFile error:', e);
       toast.error(`Duplicate failed: ${e.message || e}`);
+    }
+  },
+
+  moveItem: async (sourcePath: string, targetDir: string) => {
+    try {
+      const { rename } = await import('@tauri-apps/plugin-fs');
+      const { basename, join } = await import('@tauri-apps/api/path');
+
+      const fileName = await basename(sourcePath);
+      const newPath = await join(targetDir, fileName);
+
+      // Don't move if already in target
+      if (sourcePath === newPath) return;
+
+      await rename(sourcePath, newPath);
+
+      // Update tabs if file was open
+      const { tabs, tabContents, activeTab } = get();
+      const wasOpen = tabs.some(t => t.path === sourcePath);
+
+      if (wasOpen) {
+        const newTabs = tabs.map(t =>
+          t.path === sourcePath ? { ...t, path: newPath, label: fileName.replace(/\.md$/, '') } : t
+        );
+        const newTabContents = { ...tabContents };
+        if (newTabContents[sourcePath] !== undefined) {
+          newTabContents[newPath] = newTabContents[sourcePath];
+          delete newTabContents[sourcePath];
+        }
+        const newActive = activeTab === sourcePath ? newPath : activeTab;
+        set({ tabs: newTabs, tabContents: newTabContents, activeTab: newActive });
+      }
+
+      await get().loadFiles();
+      await get().loadGraphData();
+      toast.success(`Moved to ${fileName}`);
+    } catch (e: any) {
+      console.error('moveItem error:', e);
+      toast.error(`Failed to move: ${e.message || e}`);
     }
   },
 

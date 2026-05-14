@@ -217,6 +217,16 @@ a { color: var(--accent); text-decoration: none; }
 .file-row:hover .star-btn { opacity: 1; }
 .file-row.is-active { background: var(--accent-dim); color: var(--tx-1); }
 
+/* Drag & Drop styles */
+.file-row.dragging { opacity: 0.5; }
+.file-row.drag-over {
+  background: rgba(59, 130, 246, 0.2) !important;
+  border: 2px dashed #3b82f6;
+  border-radius: 4px;
+}
+.file-row[draggable="true"] { cursor: grab; }
+.file-row[draggable="true"]:active { cursor: grabbing; }
+
 .file-row-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--tx-3); }
 .file-row-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

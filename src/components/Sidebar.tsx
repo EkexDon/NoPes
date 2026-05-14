@@ -31,10 +31,12 @@ interface FileInfo {
 
 /* ─── Single Row ─────────────────────────────────────────── */
 const FileRow: React.FC<{ file: FileInfo; depth: number }> = ({ file, depth }) => {
-  const { openFile, activeTab, toggleFavorite, renameItem, deleteItem } = useStore();
+  const { openFile, activeTab, toggleFavorite, renameItem, deleteItem, moveItem } = useStore();
   const [open, setOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(file.name.replace(/\.md$/, ''));
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const isActive = activeTab === file.path;
 
   const handleClick = async (e: React.MouseEvent) => {
@@ -76,7 +78,7 @@ const FileRow: React.FC<{ file: FileInfo; depth: number }> = ({ file, depth }) =
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    
+
     // Use native confirm dialog
     const shouldDelete = window.confirm(`Are you sure you want to delete "${file.name}"?\n\nThis action cannot be undone.`);
     if (shouldDelete) {
@@ -84,12 +86,54 @@ const FileRow: React.FC<{ file: FileInfo; depth: number }> = ({ file, depth }) =
     }
   };
 
+  // Drag handlers for files
+  const handleDragStart = (e: React.DragEvent) => {
+    if (file.is_dir) return; // Only files can be dragged
+    e.dataTransfer.setData('text/plain', file.path);
+    e.dataTransfer.effectAllowed = 'move';
+    setIsDragging(true);
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
+  };
+
+  // Drop handlers for folders
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!file.is_dir) return; // Only folders can receive drops
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragOver(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    if (!file.is_dir) return;
+    e.preventDefault();
+    setIsDragOver(false);
+
+    const sourcePath = e.dataTransfer.getData('text/plain');
+    if (sourcePath && sourcePath !== file.path) {
+      await moveItem(sourcePath, file.path);
+      setOpen(true); // Auto-expand folder after drop
+    }
+  };
+
   return (
     <div className="file-tree-item">
       <div
-        className={`file-row ${isActive ? 'is-active' : ''}`}
+        className={`file-row ${isActive ? 'is-active' : ''} ${isDragOver ? 'drag-over' : ''} ${isDragging ? 'dragging' : ''}`}
         style={{ paddingLeft: `${10 + depth * 14}px` }}
         onClick={handleClick}
+        draggable={!file.is_dir}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         <span className="file-row-icon">
           {file.is_dir
