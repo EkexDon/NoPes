@@ -2871,7 +2871,9 @@ input:checked + .nopes-slider:before {
 
 .pet-avatar-img {
   width: 64px;
-  height: auto;
+  height: 64px;
+  object-fit: contain;
+  object-position: center bottom;
   animation: petBounce 3s infinite ease-in-out;
   transform-origin: bottom center;
   filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));
