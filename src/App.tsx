@@ -11,7 +11,7 @@ import {
   FileText, Share2, Search, Settings,
   PanelLeftClose, PanelLeftOpen, Plus, X,
   Shield, Palette, Keyboard, CalendarDays, Bot, Kanban,
-  Home, ChevronRight, Folder, LayoutGrid
+  Home, ChevronRight, Folder, LayoutGrid, BookOpen
 } from 'lucide-react';
 import { useKBar } from 'kbar';
 import { Toaster } from 'react-hot-toast';
@@ -69,7 +69,7 @@ class ErrorBoundary extends React.Component<
 }
 
 /* ─── Settings Modal ─────────────────────────────────────── */
-type SettingsTab = 'general' | 'appearance' | 'hotkeys';
+type SettingsTab = 'general' | 'appearance' | 'hotkeys' | 'tutorial';
 
 const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { vaultPath } = useStore();
@@ -106,6 +106,7 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             ['general',    <Shield size={15} />,   'General'],
             ['appearance', <Palette size={15} />,  'Appearance'],
             ['hotkeys',    <Keyboard size={15} />, 'Hotkeys'],
+            ['tutorial',   <BookOpen size={15} />, 'Tutorial'],
           ] as [SettingsTab, React.ReactNode, string][]).map(([id, icon, label]) => (
             <div key={id} className={`settings-tab ${tab === id ? 'is-active' : ''}`} onClick={() => setTab(id)}>
               {icon}{label}
@@ -188,6 +189,10 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 ['Switch to Graph',          '⌘', 'G'],
                 ['New Note',                 '⌘', 'N'],
                 ['Close Tab',                '⌘', 'W'],
+                ['Bold',                     '⌘', 'B'],
+                ['Italic',                   '⌘', 'I'],
+                ['Save',                     '⌘', 'S'],
+                ['Zen Mode',                 '⌘⇧', 'Z'],
               ] as [string, string, string][]).map(([action, mod, key]) => (
                 <div className="hotkey-row" key={action}>
                   <span className="hotkey-action">{action}</span>
@@ -198,6 +203,77 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                 </div>
               ))}
             </>
+          )}
+          {tab === 'tutorial' && (
+            <div className="tutorial-content">
+              <div className="tutorial-section">
+                <div className="tutorial-section-title">Slash Commands</div>
+                <div className="tutorial-section-desc">Type <span className="tutorial-kbd">/</span> anywhere in the editor to open the command menu.</div>
+                <table className="tutorial-table">
+                  <thead><tr><th>Command</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {([
+                      ['/Heading 1',       'Insert H1 heading'],
+                      ['/Heading 2',       'Insert H2 heading'],
+                      ['/Heading 3',       'Insert H3 heading'],
+                      ['/Bold',            'Bold text'],
+                      ['/Italic',          'Italic text'],
+                      ['/Bullet List',     'Unordered list'],
+                      ['/Numbered List',   'Ordered list'],
+                      ['/Quote',           'Blockquote'],
+                      ['/Code Block',      'Code block'],
+                      ['/Divider',         'Horizontal rule'],
+                      ['/Table',           'Insert 2-column table'],
+                      ['/Mermaid Diagram', 'Insert Mermaid chart'],
+                      ['/[Template Name]', 'Insert a saved template'],
+                    ] as [string, string][]).map(([cmd, desc]) => (
+                      <tr key={cmd}>
+                        <td><span className="tutorial-kbd">{cmd}</span></td>
+                        <td>{desc}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="tutorial-section">
+                <div className="tutorial-section-title">Keyboard Shortcuts</div>
+                <table className="tutorial-table">
+                  <thead><tr><th>Action</th><th>Shortcut</th></tr></thead>
+                  <tbody>
+                    {([
+                      ['Command Palette',     '⌘ K'],
+                      ['Toggle Sidebar',      '⌘ B'],
+                      ['Switch to Editor',    '⌘ E'],
+                      ['Switch to Graph',     '⌘ G'],
+                      ['New Note',            '⌘ N'],
+                      ['Close Tab',           '⌘ W'],
+                      ['Bold',                '⌘ B'],
+                      ['Italic',              '⌘ I'],
+                      ['Save',                '⌘ S'],
+                      ['Zen Mode',            '⌘ ⇧ Z'],
+                    ] as [string, string][]).map(([action, keys]) => (
+                      <tr key={action}>
+                        <td>{action}</td>
+                        <td><span className="tutorial-kbd">{keys}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="tutorial-section">
+                <div className="tutorial-section-title">Tips & Tricks</div>
+                <div className="tutorial-tips">
+                  <div className="tutorial-tip"><span className="tutorial-kbd">[[Note Name]]</span> — WikiLink to another note. Click to navigate.</div>
+                  <div className="tutorial-tip"><span className="tutorial-kbd">Drag &amp; Drop</span> — Drag files in the sidebar into folders.</div>
+                  <div className="tutorial-tip"><span className="tutorial-kbd">Canvas</span> — Create a Canvas file for visual mind maps &amp; freeform notes.</div>
+                  <div className="tutorial-tip"><span className="tutorial-kbd">Kanban</span> — Create a Kanban file for task boards with columns &amp; cards.</div>
+                  <div className="tutorial-tip"><span className="tutorial-kbd">Templates</span> — Save a note as a template and insert it with <span className="tutorial-kbd">/</span> or the sidebar.</div>
+                  <div className="tutorial-tip"><span className="tutorial-kbd">@date</span> — Type @ to insert a date picker or link to your Journal.</div>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>
