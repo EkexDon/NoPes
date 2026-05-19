@@ -2923,11 +2923,23 @@ input:checked + .nopes-slider:before {
   box-shadow: 0 4px 12px rgba(0,0,0,0.1);
 }
 
+.digital-pet-widget.is-collapsed {
+  padding-bottom: 8px;
+}
+
 .pet-header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
 }
+
+.pet-toggle-icon {
+  display: flex;
+  align-items: center;
+  color: var(--tx-3);
+  transition: color 0.15s;
+}
+.pet-header:hover .pet-toggle-icon { color: var(--tx-1); }
 
 .pet-name {
   font-size: 0.8rem;

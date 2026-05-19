@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import toast from 'react-hot-toast';
 import {
-  FileText, FolderOpen, ChevronRight, ChevronDown,
+  FileText, FolderOpen, ChevronRight, ChevronDown, ChevronUp,
   Plus, FolderPlus, Star, X, RotateCw, Edit3, Trash2,
   LayoutTemplate, Save, Copy, ExternalLink, Heart, Layout, Kanban
 } from 'lucide-react';
@@ -241,6 +241,17 @@ const InlineAdd: React.FC<{
 const DigitalPet: React.FC = () => {
   const { allFiles, graphData } = useStore();
   const [speech, setSpeech] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<boolean>(
+    () => localStorage.getItem('nopes_nopi_collapsed') === 'true'
+  );
+
+  const toggleCollapsed = () => {
+    setCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('nopes_nopi_collapsed', String(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     const quotes = [
@@ -282,29 +293,47 @@ const DigitalPet: React.FC = () => {
   else { petFace = nopi46; status = 'Majestic'; }
 
   return (
-    <div className="digital-pet-widget">
-      <div className="pet-header">
+    <div className={`digital-pet-widget ${collapsed ? 'is-collapsed' : ''}`}>
+      <div className="pet-header" onClick={toggleCollapsed} style={{ cursor: 'pointer' }}>
         <span className="pet-name">Nopi</span>
-        <span className="pet-level">Lvl {level}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {!collapsed && <span className="pet-level">Lvl {level}</span>}
+          <span className="pet-toggle-icon">
+            {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+          </span>
+        </div>
       </div>
-      <div className="pet-avatar-container">
-        {speech && (
-          <motion.div 
-            className="pet-speech-bubble"
-            initial={{ opacity: 0, y: 10, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
+      <AnimatePresence initial={false}>
+        {!collapsed && (
+          <motion.div
+            key="pet-body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeInOut' }}
+            style={{ overflow: 'hidden' }}
           >
-            {speech}
+            <div className="pet-avatar-container">
+              {speech && (
+                <motion.div 
+                  className="pet-speech-bubble"
+                  initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                >
+                  {speech}
+                </motion.div>
+              )}
+              <img src={petFace} alt="Nopi" className="pet-avatar-img" />
+              <div className="pet-status">{status}</div>
+            </div>
+            <div className="pet-xp-bar">
+              <div className="pet-xp-fill" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
+            </div>
+            <div className="pet-xp-text">{xp} / {nextLevelXp} XP</div>
           </motion.div>
         )}
-        <img src={petFace} alt="Nopi" className="pet-avatar-img" />
-        <div className="pet-status">{status}</div>
-      </div>
-      <div className="pet-xp-bar">
-        <div className="pet-xp-fill" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
-      </div>
-      <div className="pet-xp-text">{xp} / {nextLevelXp} XP</div>
+      </AnimatePresence>
     </div>
   );
 };
