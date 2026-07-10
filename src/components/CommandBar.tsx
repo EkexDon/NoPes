@@ -4,7 +4,8 @@ import {
   KBarAnimator, KBarSearch, KBarResults, useMatches, useRegisterActions, useKBar
 } from 'kbar';
 import { useStore } from '../store/useStore';
-import { FileText, Plus, Share2, Sparkles, Search, LayoutTemplate } from 'lucide-react';
+import { THEMES } from '../themes';
+import { FileText, Plus, Share2, Sparkles, Search, LayoutTemplate, Palette } from 'lucide-react';
 import { AIService } from '../workers/AIService';
 import Fuse from 'fuse.js';
 
@@ -159,8 +160,11 @@ const TemplateResults: React.FC<{
 
 /* ─── CommandBar Content ─────────────────────────────────── */
 const CommandBarContent: React.FC = () => {
-  const { allFiles, openFile, setViewMode, createFile, createFileFromTemplate, aiIndex, isAiEnabled, templates, buildSearchIndex, searchIndex } = useStore();
-  const { query } = useKBar();
+  const { allFiles, openFile, setViewMode, createFile, createFileFromTemplate, aiIndex, isAiEnabled, templates, buildSearchIndex, searchIndex, setTheme } = useStore();
+  const { query, searchQuery, showing } = useKBar(state => ({
+    searchQuery: state.searchQuery,
+    showing: state.visualState !== 'hidden',
+  }));
   const [aiStatus, setAiStatus]           = useState<string>('idle');
   const [semanticHits, setSemanticHits]   = useState<{ path: string; label: string; score: number }[]>([]);
   const [fullTextHits, setFullTextHits]   = useState<{ path: string; label: string; matches: string[]; score: number }[]>([]);
@@ -172,10 +176,11 @@ const CommandBarContent: React.FC = () => {
   const lastQuery                         = useRef('');
   const fuseRef                           = useRef<Fuse<{ path: string; content: string }> | null>(null);
 
-  // Build search index on mount
+  // (Re)build the full-text index whenever the palette opens, so
+  // results reflect edits made since the last search.
   useEffect(() => {
-    buildSearchIndex();
-  }, [buildSearchIndex]);
+    if (showing) buildSearchIndex();
+  }, [showing, buildSearchIndex]);
 
   // Initialize Fuse when searchIndex changes
   useEffect(() => {
@@ -195,12 +200,11 @@ const CommandBarContent: React.FC = () => {
     return unsub;
   }, []);
 
-  // Listen to kbar query changes and run searches
+  // React to kbar query changes and run searches. Reading kbar's own
+  // state (instead of a DOM listener on '.kbar-search') works even
+  // though the input only exists while the portal is open.
   useEffect(() => {
-    const el = document.querySelector('.kbar-search') as HTMLInputElement | null;
-    if (!el) return;
-    const handler = () => {
-      const q = el.value.trim();
+      const q = (searchQuery || '').trim();
       if (q === lastQuery.current) return;
       lastQuery.current = q;
       if (searchDebounce.current !== undefined) clearTimeout(searchDebounce.current);
@@ -251,10 +255,8 @@ const CommandBarContent: React.FC = () => {
           setSemanticHits(hits.filter(h => h.score > 0.25));
         } catch { setSemanticHits([]); }
       }, 350);
-    };
-    el.addEventListener('input', handler);
-    return () => { el.removeEventListener('input', handler); if (searchDebounce.current !== undefined) clearTimeout(searchDebounce.current); };
-  }, [aiStatus, aiIndex, isAiEnabled, templates, searchIndex]);
+    return () => { if (searchDebounce.current !== undefined) clearTimeout(searchDebounce.current); };
+  }, [searchQuery, aiStatus, aiIndex, isAiEnabled, templates, searchIndex]);
 
   const actions = useMemo(() => {
     const fileActions = allFiles
@@ -272,13 +274,23 @@ const CommandBarContent: React.FC = () => {
         icon: <FileText size={16} />,
       }));
 
+    const themeActions = THEMES.map(t => ({
+      id: `theme-${t.id}`,
+      name: `Theme: ${t.label}`,
+      keywords: `theme appearance style ${t.label} ${t.dark ? 'dark' : 'light'}`,
+      section: 'Appearance',
+      perform: () => setTheme(t.id),
+      icon: <Palette size={16} />,
+    }));
+
     return [
       { id: 'new-note',    name: 'New Note',        shortcut: ['n'], keywords: 'create new note', section: 'Actions', perform: () => createFile('Untitled'), icon: <Plus size={16} /> },
       { id: 'new-from-template', name: 'New from Template', shortcut: ['t'], keywords: 'template', section: 'Actions', perform: () => setShowNewNoteModal(true), icon: <LayoutTemplate size={16} /> },
       { id: 'graph-view',  name: 'Open Graph View', shortcut: ['g'], keywords: 'graph',            section: 'Actions', perform: () => setViewMode('graph'),    icon: <Share2 size={16} /> },
+      ...themeActions,
       ...fileActions,
     ];
-  }, [allFiles, openFile, setViewMode, createFile]);
+  }, [allFiles, openFile, setViewMode, createFile, setTheme]);
 
   useRegisterActions(actions, [actions]);
 

@@ -4,14 +4,15 @@ import { NoteEditor } from './components/NoteEditor';
 import { GraphView } from './components/GraphView';
 import { CommandBar } from './components/CommandBar';
 import { JournalView } from './components/JournalView';
-import { useStore } from './store/useStore';
+import { useStore, ViewMode } from './store/useStore';
+import { THEMES } from './themes';
 import { open } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { 
   FileText, Share2, Search, Settings,
   PanelLeftClose, PanelLeftOpen, Plus, X,
   Shield, Palette, Keyboard, CalendarDays, Bot, Kanban,
-  Home, ChevronRight, Folder, LayoutGrid
+  Home, ChevronRight, Folder, LayoutGrid, ListTodo, Lock, GraduationCap
 } from 'lucide-react';
 import { useKBar } from 'kbar';
 import { Toaster } from 'react-hot-toast';
@@ -19,6 +20,11 @@ import { VaultChat } from './components/VaultChat';
 import { CanvasView } from './components/CanvasView';
 import { KanbanView } from './components/KanbanView';
 import { HomeView } from './components/HomeView';
+import { TasksView, notifyDueTasks } from './components/TasksView';
+import { ReviewView } from './components/ReviewView';
+import { LockScreen } from './components/LockScreen';
+import { WhisperSettings } from './components/VoiceMemo';
+import { isLockEnabled, createLockConfig, verifyPassword, loadLockConfig, saveLockConfig } from './vaultLock';
 
 /* ─── Error Boundary ─────────────────────────────────────── */
 const MAX_AUTO_RETRIES = 2;
@@ -69,10 +75,16 @@ class ErrorBoundary extends React.Component<
 }
 
 /* ─── Settings Modal ─────────────────────────────────────── */
-type SettingsTab = 'general' | 'appearance' | 'hotkeys';
+type SettingsTab = 'general' | 'appearance' | 'security' | 'hotkeys';
 
 const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  const { vaultPath } = useStore();
+  const {
+    vaultPath, theme, setTheme,
+    isAutoSaveEnabled, setAutoSaveEnabled,
+    isAiEnabled, setAiEnabled,
+    isDigestEnabled, setDigestEnabled,
+    isClipperEnabled, setClipperEnabled,
+  } = useStore();
   const [tab, setTab] = useState<SettingsTab>('general');
   const [stats, setStats] = useState({ app: '—', webview: '—', ollama: '—' });
 
@@ -105,6 +117,7 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           {([
             ['general',    <Shield size={15} />,   'General'],
             ['appearance', <Palette size={15} />,  'Appearance'],
+            ['security',   <Lock size={15} />,     'Security'],
             ['hotkeys',    <Keyboard size={15} />, 'Hotkeys'],
           ] as [SettingsTab, React.ReactNode, string][]).map(([id, icon, label]) => (
             <div key={id} className={`settings-tab ${tab === id ? 'is-active' : ''}`} onClick={() => setTab(id)}>
@@ -134,30 +147,77 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                   <div className="setting-info-desc">Notes save automatically as you type (400ms debounce).</div>
                 </div>
                 <label className="nopes-switch">
-                  <input 
-                    type="checkbox" 
-                    checked={useStore.getState().isAutoSaveEnabled} 
-                    onChange={(e) => useStore.getState().setAutoSaveEnabled(e.target.checked)}
+                  <input
+                    type="checkbox"
+                    checked={isAutoSaveEnabled}
+                    onChange={(e) => setAutoSaveEnabled(e.target.checked)}
                   />
                   <span className="nopes-slider"></span>
                 </label>
               </div>
+              <AutostartSetting />
               <div className="setting-row">
                 <div>
                   <div className="setting-info-label">Enable AI Features</div>
                   <div className="setting-info-desc">Local semantic search and AI Chat (powered by Ollama). Disable to save memory/battery.</div>
                 </div>
                 <label className="nopes-switch">
-                  <input 
-                    type="checkbox" 
-                    checked={useStore.getState().isAiEnabled} 
-                    onChange={(e) => useStore.getState().setAiEnabled(e.target.checked)}
+                  <input
+                    type="checkbox"
+                    checked={isAiEnabled}
+                    onChange={(e) => setAiEnabled(e.target.checked)}
+                  />
+                  <span className="nopes-slider"></span>
+                </label>
+              </div>
+              <WhisperSettings />
+              <div className="setting-row">
+                <div>
+                  <div className="setting-info-label">Web Clipper</div>
+                  <div className="setting-info-desc">
+                    Receive clips from the NoPes browser extension via 127.0.0.1:21787 (token-gated, loopback only, off by default).
+                    Extension setup: load <code>clipper-extension/</code> and paste the token below.
+                  </div>
+                  {isClipperEnabled && (
+                    <code
+                      className="setting-value"
+                      style={{ marginTop: 6, display: 'inline-block', cursor: 'pointer' }}
+                      title="Click to copy the clipper token"
+                      onClick={() => {
+                        navigator.clipboard.writeText(localStorage.getItem('nopes_clipper_token') ?? '');
+                        import('react-hot-toast').then(m => m.toast.success('Token copied'));
+                      }}
+                    >
+                      token: {(localStorage.getItem('nopes_clipper_token') ?? '').slice(0, 8)}… (click to copy)
+                    </code>
+                  )}
+                </div>
+                <label className="nopes-switch">
+                  <input
+                    type="checkbox"
+                    checked={isClipperEnabled}
+                    onChange={(e) => setClipperEnabled(e.target.checked)}
+                  />
+                  <span className="nopes-slider"></span>
+                </label>
+              </div>
+              <div className="setting-row">
+                <div>
+                  <div className="setting-info-label">Weekly AI Digest</div>
+                  <div className="setting-info-desc">Every week, a locally-generated "Your Week" note summarizes what you wrote. Requires AI features.</div>
+                </div>
+                <label className="nopes-switch">
+                  <input
+                    type="checkbox"
+                    checked={isDigestEnabled && isAiEnabled}
+                    disabled={!isAiEnabled}
+                    onChange={(e) => setDigestEnabled(e.target.checked)}
                   />
                   <span className="nopes-slider"></span>
                 </label>
               </div>
 
-                <div style={{ marginTop: '24px', padding: '16px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid var(--bd-1)' }}>
+                <div style={{ marginTop: '24px', padding: '16px', background: 'var(--inset)', borderRadius: '8px', border: '1px solid var(--bd-1)' }}>
                   <div style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: '12px', letterSpacing: '0.05em', fontWeight: 600 }}>System Resources</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
                   <ResourceStat label="App Process" value={stats.app} />
@@ -171,29 +231,60 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
             </>
           )}
           {tab === 'appearance' && (
-            <div className="setting-row">
-              <div>
-                <div className="setting-info-label">Theme</div>
-                <div className="setting-info-desc">Visual style.</div>
+            <>
+              <div className="setting-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+                <div>
+                  <div className="setting-info-label">Theme</div>
+                  <div className="setting-info-desc">Pick a visual style. Applies instantly and persists.</div>
+                </div>
               </div>
-              <span className="setting-value">Dark (Obsidian)</span>
-            </div>
+              <div className="theme-grid">
+                {THEMES.map(t => (
+                  <button
+                    key={t.id}
+                    className={`theme-card ${theme === t.id ? 'is-active' : ''}`}
+                    onClick={() => setTheme(t.id)}
+                  >
+                    <div className="theme-card-preview" style={{ background: t.preview[0] }}>
+                      <div className="theme-card-surface" style={{ background: t.preview[1] }}>
+                        <div className="theme-card-accent" style={{ background: t.preview[2] }} />
+                        <div className="theme-card-line" style={{ background: t.preview[3] }} />
+                        <div className="theme-card-line short" style={{ background: t.preview[3] }} />
+                      </div>
+                    </div>
+                    <span className="theme-card-label">
+                      {t.label}
+                      <span className="theme-card-kind">{t.dark ? 'Dark' : 'Light'}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
           )}
+          {tab === 'security' && <SecuritySettings />}
           {tab === 'hotkeys' && (
             <>
               {([
-                ['Search / Command Palette', '⌘', 'K'],
-                ['Toggle Sidebar',           '⌘', 'B'],
-                ['Switch to Editor',         '⌘', 'E'],
-                ['Switch to Graph',          '⌘', 'G'],
-                ['New Note',                 '⌘', 'N'],
-                ['Close Tab',                '⌘', 'W'],
-              ] as [string, string, string][]).map(([action, mod, key]) => (
+                ['Search / Command Palette', ['⌘', 'K']],
+                ['Toggle Sidebar',           ['⌘', 'B']],
+                ['Switch to Editor',         ['⌘', 'E']],
+                ['Open Canvas',              ['⌘', 'D']],
+                ['Switch to Graph',          ['⌘', 'G']],
+                ['Open Journal',             ['⌘', 'J']],
+                ['Open Kanban',              ['⌘', 'M']],
+                ['Open Tasks',               ['⌘', 'T']],
+                ['Review Flashcards',        ['⌘', 'R']],
+                ['Go Home',                  ['⌘', 'H']],
+                ['New Note',                 ['⌘', 'N']],
+                ['Close Tab',                ['⌘', 'W']],
+                ['Find in Note',             ['⌘', 'F']],
+                ['Zen Mode',                 ['⇧', '⌘', 'Z']],
+                ['Lock Vault',               ['⌘', 'L']],
+              ] as [string, string[]][]).map(([action, keys]) => (
                 <div className="hotkey-row" key={action}>
                   <span className="hotkey-action">{action}</span>
                   <div className="hotkey-keys">
-                    <span className="hotkey-key">{mod}</span>
-                    <span className="hotkey-key">{key}</span>
+                    {keys.map(k => <span className="hotkey-key" key={k}>{k}</span>)}
                   </div>
                 </div>
               ))}
@@ -202,6 +293,147 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         </div>
       </div>
     </div>
+  );
+};
+
+/* ─── Launch at login (completes Quick Capture) ──────────── */
+const AutostartSetting: React.FC = () => {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    import('@tauri-apps/plugin-autostart')
+      .then(m => m.isEnabled())
+      .then(setEnabled)
+      .catch(() => setEnabled(null));
+  }, []);
+
+  if (!('__TAURI_INTERNALS__' in window) || enabled === null) return null;
+
+  return (
+    <div className="setting-row">
+      <div>
+        <div className="setting-info-label">Launch at Login</div>
+        <div className="setting-info-desc">Start NoPes when you log in, so ⌥Space Quick Capture is always one keystroke away.</div>
+      </div>
+      <label className="nopes-switch">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={async (e) => {
+            const next = e.target.checked;
+            try {
+              const m = await import('@tauri-apps/plugin-autostart');
+              if (next) await m.enable(); else await m.disable();
+              setEnabled(next);
+            } catch (err: any) {
+              import('react-hot-toast').then(t => t.toast.error(`Autostart: ${err?.message ?? err}`));
+            }
+          }}
+        />
+        <span className="nopes-slider"></span>
+      </label>
+    </div>
+  );
+};
+
+/* ─── Security settings (Vault Lock) ─────────────────────── */
+const SecuritySettings: React.FC = () => {
+  const [enabled, setEnabled] = useState(isLockEnabled());
+  const [current, setCurrent] = useState('');
+  const [pw, setPw] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const reset = () => { setCurrent(''); setPw(''); setConfirm(''); };
+
+  const withVerify = async (fn: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const cfg = loadLockConfig();
+      if (cfg && !(await verifyPassword(current, cfg))) {
+        import('react-hot-toast').then(m => m.toast.error('Current password is wrong'));
+        return;
+      }
+      await fn();
+      reset();
+    } finally { setBusy(false); }
+  };
+
+  const enable = async () => {
+    if (pw.length < 4) { import('react-hot-toast').then(m => m.toast.error('Password needs at least 4 characters')); return; }
+    if (pw !== confirm) { import('react-hot-toast').then(m => m.toast.error('Passwords do not match')); return; }
+    setBusy(true);
+    try {
+      saveLockConfig(await createLockConfig(pw));
+      setEnabled(true);
+      reset();
+      import('react-hot-toast').then(m => m.toast.success('Vault Lock enabled — ⌘L locks instantly'));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <>
+      <div className="setting-row" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+        <div>
+          <div className="setting-info-label">Vault Lock</div>
+          <div className="setting-info-desc">
+            Locks the app behind a password (on launch and via ⌘L). This is a privacy
+            lock for whoever is at your keyboard — notes on disk stay plain markdown.
+          </div>
+        </div>
+        <span className="setting-value">{enabled ? '🔒 Enabled' : 'Disabled'}</span>
+      </div>
+
+      {!enabled ? (
+        <div className="security-form">
+          <input type="password" className="security-input" placeholder="New password" value={pw} onChange={e => setPw(e.target.value)} />
+          <input type="password" className="security-input" placeholder="Confirm password" value={confirm} onChange={e => setConfirm(e.target.value)} />
+          <button className="security-btn primary" onClick={enable} disabled={busy || !pw}>Enable Vault Lock</button>
+        </div>
+      ) : (
+        <>
+          <div className="security-form">
+            <button
+              className="security-btn primary"
+              onClick={() => document.dispatchEvent(new CustomEvent('nopes:lock'))}
+            >
+              🔒 Lock now (⌘L)
+            </button>
+          </div>
+          <div className="security-form">
+            <input type="password" className="security-input" placeholder="Current password" value={current} onChange={e => setCurrent(e.target.value)} />
+            <input type="password" className="security-input" placeholder="New password (leave empty to disable)" value={pw} onChange={e => setPw(e.target.value)} />
+            <input type="password" className="security-input" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                className="security-btn"
+                disabled={busy || !current || !pw}
+                onClick={() => withVerify(async () => {
+                  if (pw !== confirm) { import('react-hot-toast').then(m => m.toast.error('Passwords do not match')); return; }
+                  saveLockConfig(await createLockConfig(pw));
+                  import('react-hot-toast').then(m => m.toast.success('Password changed'));
+                })}
+              >
+                Change password
+              </button>
+              <button
+                className="security-btn danger"
+                disabled={busy || !current}
+                onClick={() => withVerify(async () => {
+                  saveLockConfig(null);
+                  setEnabled(false);
+                  import('react-hot-toast').then(m => m.toast.success('Vault Lock disabled'));
+                })}
+              >
+                Disable lock
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </>
   );
 };
 
@@ -249,7 +481,7 @@ const TabBar: React.FC = () => {
 
 /* ─── Icon Dock ──────────────────────────────────────────── */
 const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
-  const { viewMode, setViewMode, isSidebarOpen, setSidebarOpen, isSplitView, toggleSplitView } = useStore();
+  const { viewMode, setViewMode, isSidebarOpen, setSidebarOpen, isSplitView, toggleSplitView, isAiEnabled } = useStore();
   const { query } = useKBar();
 
   return (
@@ -276,10 +508,16 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
         <button className={`icon-btn ${viewMode === 'kanban' ? 'active' : ''}`} onClick={() => setViewMode('kanban')} title="Kanban (⌘M)">
           <Kanban size={18} />
         </button>
+        <button className={`icon-btn ${viewMode === 'tasks' ? 'active' : ''}`} onClick={() => setViewMode('tasks')} title="Tasks (⌘T)">
+          <ListTodo size={18} />
+        </button>
+        <button className={`icon-btn ${viewMode === 'review' ? 'active' : ''}`} onClick={() => setViewMode('review')} title="Review flashcards (⌘R)">
+          <GraduationCap size={18} />
+        </button>
         <button className="icon-btn" onClick={() => query.toggle()} title="Search (⌘K)">
           <Search size={18} />
         </button>
-        {useStore.getState().isAiEnabled && (
+        {isAiEnabled && (
           <button className="icon-btn" onClick={() => document.dispatchEvent(new CustomEvent('toggle-chat'))} title="Vault Chat">
             <Bot size={18} />
           </button>
@@ -294,6 +532,61 @@ const IconDock: React.FC<{ onSettings: () => void }> = ({ onSettings }) => {
           <Settings size={18} />
         </button>
       </div>
+    </div>
+  );
+};
+
+/* ─── Split View: right-pane view switcher ───────────────── */
+const RightPaneSwitcher: React.FC = () => {
+  const { rightViewMode, setRightViewMode, rightActiveTab, setRightActiveTab, tabs, activeTab } = useStore();
+
+  const pickView = (id: ViewMode) => {
+    // Entering editor mode with nothing selected: default to a sensible
+    // note (the left pane's tab, else the first open tab).
+    if (id === 'editor' && !rightActiveTab) {
+      setRightActiveTab(activeTab ?? tabs[0]?.path ?? null);
+    }
+    setRightViewMode(id);
+  };
+
+  const views: [ViewMode, React.ReactNode, string][] = [
+    ['editor',  <FileText size={15} />,     'Editor'],
+    ['home',    <Home size={15} />,         'Home'],
+    ['canvas',  <Palette size={15} />,      'Canvas'],
+    ['graph',   <Share2 size={15} />,       'Graph'],
+    ['journal', <CalendarDays size={15} />, 'Journal'],
+    ['kanban',  <Kanban size={15} />,       'Kanban'],
+    ['tasks',   <ListTodo size={15} />,     'Tasks'],
+    ['review',  <GraduationCap size={15} />, 'Review'],
+  ];
+
+  return (
+    <div className="split-pane-toolbar">
+      <div className="split-pane-views">
+        {views.map(([id, icon, label]) => (
+          <button
+            key={id}
+            className={`icon-btn sm ${rightViewMode === id ? 'active' : ''}`}
+            onClick={() => pickView(id)}
+            title={label}
+          >
+            {icon}
+          </button>
+        ))}
+      </div>
+      {rightViewMode === 'editor' && (
+        <select
+          className="split-pane-tab-select"
+          value={rightActiveTab ?? ''}
+          onChange={e => setRightActiveTab(e.target.value || null)}
+          title="Note shown in this pane"
+        >
+          <option value="">Select note…</option>
+          {tabs.map(t => (
+            <option key={t.path} value={t.path}>{t.label}</option>
+          ))}
+        </select>
+      )}
     </div>
   );
 };
@@ -369,6 +662,8 @@ const Breadcrumb: React.FC<{
               <>
                 {viewMode === 'canvas' && <LayoutGrid size={14} />}
                 {viewMode === 'kanban' && <Kanban size={14} />}
+                {viewMode === 'tasks' && <ListTodo size={14} />}
+                {viewMode === 'review' && <GraduationCap size={14} />}
                 {viewMode === 'graph' && <Share2 size={14} />}
                 {viewMode === 'journal' && <CalendarDays size={14} />}
                 {viewMode === 'editor' && <FileText size={14} />}
@@ -405,6 +700,8 @@ const App: React.FC = () => {
   } = useStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  // Vault Lock: gate the whole UI on launch when enabled; ⌘L re-locks.
+  const [locked, setLocked] = useState(() => isLockEnabled());
 
   // Split View Resizer state
   const [leftWidth, setLeftWidth] = useState(50);
@@ -445,11 +742,13 @@ const App: React.FC = () => {
       // Set default view to Home when vault opens
       setViewMode('home');
     }
-    // Manage AI process based on setting
-    const { isAiEnabled } = useStore.getState();
-    import('@tauri-apps/api/core').then(m => {
-      m.invoke('manage_ollama', { active: isAiEnabled }).catch(console.error);
-    });
+    // Manage AI process based on setting (Tauri only)
+    if ('__TAURI_INTERNALS__' in window) {
+      const { isAiEnabled } = useStore.getState();
+      import('@tauri-apps/api/core').then(m => {
+        m.invoke('manage_ollama', { active: isAiEnabled }).catch(console.error);
+      });
+    }
   }, [vaultPath, loadFiles, loadGraphData, setViewMode]);
 
   const handleOpenVault = useCallback(async () => {
@@ -460,6 +759,16 @@ const App: React.FC = () => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.metaKey && !e.ctrlKey) return;
+      // ⌘L is the panic hotkey — it must fire even from inside an editor
+      if (e.key === 'l' && isLockEnabled()) {
+        e.preventDefault();
+        setLocked(true);
+        return;
+      }
+      // While typing (inputs, modals, the TipTap editor) leave app shortcuts
+      // alone — ⌘B must bold, ⌘E must toggle code, etc.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       switch (e.key) {
         case 'b': e.preventDefault(); setSidebarOpen(!isSidebarOpen); break;
         case 'e': e.preventDefault(); setViewMode('editor'); break;
@@ -467,6 +776,8 @@ const App: React.FC = () => {
         case 'g': e.preventDefault(); setViewMode('graph'); break;
         case 'j': e.preventDefault(); setViewMode('journal'); break;
         case 'm': e.preventDefault(); setViewMode('kanban'); break;
+        case 't': e.preventDefault(); setViewMode('tasks'); break;
+        case 'r': e.preventDefault(); setViewMode('review'); break;
         case 'h': e.preventDefault(); setViewMode('home'); break;
         case 'n': e.preventDefault(); createFile('Untitled'); break;
         case 'w': e.preventDefault(); if (activeTab) closeTab(activeTab); break;
@@ -481,22 +792,79 @@ const App: React.FC = () => {
     if (viewMode === 'graph') loadGraphData();
   }, [viewMode, loadGraphData]);
 
+  // Once the vault index has data, surface due/overdue tasks (max 1/day)
+  const indexVersion = useStore(s => s.indexVersion);
+  const notifiedRef = useRef(false);
   useEffect(() => {
-    const unlisten = getCurrentWindow().onDragDropEvent((event) => {
-      if (event.payload.type === 'drop') {
-        const { paths } = event.payload;
-        if (paths.length > 0) {
-          importFiles(paths);
-        }
+    if (indexVersion > 0 && !notifiedRef.current) {
+      notifiedRef.current = true;
+      notifyDueTasks();
+      // Weekly digest rides the same "index is ready" signal
+      useStore.getState().runWeeklyDigest();
+    }
+  }, [indexVersion]);
+
+  useEffect(() => {
+    // getCurrentWindow() throws outside Tauri (plain browser / vitest)
+    let unlisten: Promise<() => void> | null = null;
+    if ('__TAURI_INTERNALS__' in window) {
+      try {
+        unlisten = getCurrentWindow().onDragDropEvent((event) => {
+          if (event.payload.type === 'drop') {
+            const { paths } = event.payload;
+            if (paths.length > 0) {
+              importFiles(paths);
+            }
+          }
+        });
+      } catch (err) {
+        console.warn('[NoPes] Drag & drop listener unavailable:', err);
       }
-    });
+    }
 
     const onToggleChat = () => setChatOpen(o => !o);
     document.addEventListener('toggle-chat', onToggleChat);
+    const onLock = () => { if (isLockEnabled()) setLocked(true); };
+    document.addEventListener('nopes:lock', onLock);
+
+    // Web Clipper: restore server if enabled + receive clips
+    let unlistenClip: Promise<() => void> | null = null;
+    if ('__TAURI_INTERNALS__' in window) {
+      const { isClipperEnabled, setClipperEnabled } = useStore.getState();
+      if (isClipperEnabled) setClipperEnabled(true); // re-bind on launch
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        unlistenClip = listen('nopes:clip', (event) => {
+          useStore.getState().saveClip((event.payload ?? {}) as any);
+        });
+      });
+    }
+
+    // Quick Capture (separate window) wrote to a daily note — refresh the
+    // file tree, and if that note is open, reload its content from disk.
+    let unlistenCapture: Promise<() => void> | null = null;
+    if ('__TAURI_INTERNALS__' in window) {
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        unlistenCapture = listen<{ path: string }>('nopes:capture-saved', async (event) => {
+          const { loadFiles, tabContents } = useStore.getState();
+          await loadFiles();
+          const notePath = event.payload.path;
+          if (tabContents[notePath] !== undefined) {
+            try {
+              const { readTextFile } = await import('@tauri-apps/plugin-fs');
+              const fresh = await readTextFile(notePath);
+              useStore.setState(state => ({ tabContents: { ...state.tabContents, [notePath]: fresh } }));
+            } catch { /* note may have been moved */ }
+          }
+        });
+      });
+    }
 
     return () => {
-      unlisten.then(fn => fn());
+      unlisten?.then(fn => fn()).catch(() => {});
+      unlistenCapture?.then(fn => fn()).catch(() => {});
+      unlistenClip?.then(fn => fn()).catch(() => {});
       document.removeEventListener('toggle-chat', onToggleChat);
+      document.removeEventListener('nopes:lock', onLock);
     };
   }, [importFiles]);
 
@@ -539,6 +907,8 @@ const App: React.FC = () => {
                     viewMode === 'journal' ? <JournalView /> :
                     viewMode === 'canvas' ? <CanvasView /> :
                     viewMode === 'kanban' ? <KanbanView /> :
+                    viewMode === 'tasks' ? <TasksView /> :
+                    viewMode === 'review' ? <ReviewView /> :
                     viewMode === 'home' ? <HomeView /> :
                     (
                       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -568,14 +938,20 @@ const App: React.FC = () => {
                 {/* Right Pane */}
                 {isSplitView && (
                   <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-0)' }}>
-                    { rightViewMode === 'graph' ? <GraphView /> :
-                      rightViewMode === 'journal' ? <JournalView /> :
-                      rightViewMode === 'canvas' ? <CanvasView /> :
-                      rightViewMode === 'kanban' ? <KanbanView /> :
-                      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                        {rightActiveTab ? <NoteEditor key={rightActiveTab} tabId={rightActiveTab} /> : <EmptyState />}
-                      </div>
-                    }
+                    <RightPaneSwitcher />
+                    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                      { rightViewMode === 'graph' ? <GraphView /> :
+                        rightViewMode === 'journal' ? <JournalView /> :
+                        rightViewMode === 'canvas' ? <CanvasView /> :
+                        rightViewMode === 'kanban' ? <KanbanView /> :
+                        rightViewMode === 'tasks' ? <TasksView /> :
+                        rightViewMode === 'review' ? <ReviewView /> :
+                        rightViewMode === 'home' ? <HomeView /> :
+                        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                          {rightActiveTab ? <NoteEditor key={rightActiveTab} tabId={rightActiveTab} /> : <EmptyState />}
+                        </div>
+                      }
+                    </div>
                   </div>
                 )}
               </>
@@ -584,6 +960,7 @@ const App: React.FC = () => {
           {vaultPath && chatOpen && <VaultChat onClose={() => setChatOpen(false)} />}
         </div>
         {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+        {locked && <LockScreen onUnlock={() => setLocked(false)} />}
       </CommandBar>
     </ErrorBoundary>
   );

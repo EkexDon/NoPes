@@ -1,24 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store/useStore';
 import toast from 'react-hot-toast';
 import {
   FileText, FolderOpen, ChevronRight, ChevronDown,
   Plus, FolderPlus, Star, X, RotateCw, Edit3, Trash2,
-  LayoutTemplate, Save, Copy, ExternalLink, Heart, Layout, Kanban
+  LayoutTemplate, Save
 } from 'lucide-react';
 import { openPath as openExternal } from '@tauri-apps/plugin-opener';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ContextMenu } from './ContextMenu';
-import { useContextMenu } from '../hooks/useContextMenu';
-
-import nopi00 from '../assets/nopi/pet_00.png';
-import nopi05 from '../assets/nopi/pet_05.png';
-import nopi09 from '../assets/nopi/pet_09.png';
-import nopi14 from '../assets/nopi/pet_14.png';
-import nopi28 from '../assets/nopi/pet_28.png';
-import nopi32 from '../assets/nopi/pet_32.png';
-import nopi42 from '../assets/nopi/pet_42.png';
-import nopi46 from '../assets/nopi/pet_46.png';
+import { nopiForLevel, saveNopiLevel } from '../nopi';
 
 /* ─── Types ──────────────────────────────────────────────── */
 interface FileInfo {
@@ -66,21 +56,35 @@ const FileRow: React.FC<{ file: FileInfo; depth: number }> = ({ file, depth }) =
     if (!file.is_dir) toggleFavorite(file.path);
   };
 
+  // Enter triggers handleRename, then the input's blur fires it again
+  // against the old path — guard so it only runs once per edit session.
+  const renameInFlight = useRef(false);
   const handleRename = async () => {
-    if (editValue.trim() && editValue !== file.name.replace(/\.md$/, '')) {
-       await renameItem(file.path, editValue.trim());
-    } else {
-       setEditValue(file.name.replace(/\.md$/, ''));
+    if (renameInFlight.current) return;
+    renameInFlight.current = true;
+    try {
+      if (editValue.trim() && editValue !== file.name.replace(/\.md$/, '')) {
+         await renameItem(file.path, editValue.trim());
+      } else {
+         setEditValue(file.name.replace(/\.md$/, ''));
+      }
+      setIsEditing(false);
+    } finally {
+      renameInFlight.current = false;
     }
-    setIsEditing(false);
   };
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
 
-    // Use native confirm dialog
-    const shouldDelete = window.confirm(`Are you sure you want to delete "${file.name}"?\n\nThis action cannot be undone.`);
+    // window.confirm doesn't work in Tauri's WebView (always false) —
+    // use the native dialog plugin instead.
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    const shouldDelete = await ask(
+      `Are you sure you want to delete "${file.name}"?\n\nThis action cannot be undone.`,
+      { title: 'Delete', kind: 'warning' }
+    );
     if (shouldDelete) {
       await deleteItem(file.path);
     }
@@ -244,7 +248,6 @@ const DigitalPet: React.FC = () => {
 
   useEffect(() => {
     const quotes = [
-      "Meow! 🐱",
       "Try adding #task to organize quests!",
       "Checking off boxes gives me XP! ✅",
       "Use #creative for a purple aura ✨",
@@ -269,17 +272,9 @@ const DigitalPet: React.FC = () => {
   
   const progress = ((xp - currentLevelBaseXp) / (nextLevelXp - currentLevelBaseXp)) * 100;
 
-  let petFace = nopi00;
-  let status = 'Purring';
-  
-  if (level < 5) { petFace = nopi00; status = 'Curious'; }
-  else if (level < 10) { petFace = nopi05; status = 'Playful'; }
-  else if (level < 15) { petFace = nopi09; status = 'Sneaky'; }
-  else if (level < 20) { petFace = nopi14; status = 'Armored'; }
-  else if (level < 25) { petFace = nopi28; status = 'Golden'; }
-  else if (level < 35) { petFace = nopi32; status = 'Elemental'; }
-  else if (level < 43) { petFace = nopi42; status = 'Ethereal'; }
-  else { petFace = nopi46; status = 'Majestic'; }
+  const { face: petFace, status } = nopiForLevel(level);
+  // persist so lightweight windows (Quick Capture) show the same evolution
+  useEffect(() => { saveNopiLevel(level); }, [level]);
 
   return (
     <div className="digital-pet-widget">

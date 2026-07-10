@@ -14,6 +14,28 @@ import {
 } from '@tauri-apps/plugin-fs';
 import { toast } from 'react-hot-toast';
 import { AIService } from '../workers/AIService';
+import { ThemeId, DEFAULT_THEME, isValidTheme, applyThemeToDom } from '../themes';
+import { maybeSnapshotNote, moveHistory } from '../history';
+import { VaultIndex, loadPersistedIndex, reconcileIndex, schedulePersist } from '../vaultIndex';
+import { maybeGenerateDigest } from '../digest';
+import { ClipPayload, buildClipNote, clipNoteName, getClipperToken } from '../clip';
+import { healMediaEmbeds } from '../extensions/imageMarkdown';
+
+/* The Vault Index — incremental extraction layer (tasks, tags, wikilinks,
+   frontmatter) behind the Task Dashboard, digest, and future queries.
+   Lives at module scope; views subscribe via the store's indexVersion. */
+let vaultIndex = new VaultIndex();
+let indexLoadedFor: string | null = null;
+export function getVaultIndex(): VaultIndex { return vaultIndex; }
+function touchIndex(set: (v: any) => void) {
+  set((state: any) => ({ indexVersion: state.indexVersion + 1 }));
+}
+
+/* Resolve persisted theme and stamp it on <html> at module init,
+   before first paint — prevents a default-theme flash. */
+const storedTheme = localStorage.getItem('nopes_theme');
+const initialTheme: ThemeId = isValidTheme(storedTheme) ? storedTheme : DEFAULT_THEME;
+applyThemeToDom(initialTheme);
 
 export async function scanDir(root: string, opts: { maxDepth: number; maxEntries: number; visited: Set<string> }, favorites: string[]): Promise<{ entries: FileInfo[]; truncated: boolean }> {
   if (opts.maxDepth <= 0 || opts.visited.size >= opts.maxEntries) return { entries: [], truncated: true };
@@ -37,6 +59,9 @@ export async function scanDir(root: string, opts: { maxDepth: number; maxEntries
 
   for (const entry of dirEntries) {
     if (opts.visited.size >= opts.maxEntries) { truncated = true; break; }
+    // Hidden/internal directories (.nopes history, .git, .obsidian, …)
+    // are never part of the vault's visible tree.
+    if (entry.name.startsWith('.')) continue;
     const fullPath = await join(root, entry.name);
     const info: FileInfo = {
       name: entry.name,
@@ -110,7 +135,7 @@ export interface FileMetadata {
   itemType: 'note' | 'canvas' | 'kanban' | 'folder';
 }
 
-export type ViewMode = 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban' | 'home';
+export type ViewMode = 'editor' | 'graph' | 'journal' | 'canvas' | 'kanban' | 'home' | 'tasks' | 'review';
 
 const MAX_AI_INDEX_ENTRIES = 10000;
 const AI_INDEX_PRUNE_RATIO = 0.2;
@@ -137,6 +162,8 @@ interface AppState {
   isRefreshing: boolean;
   isAutoSaveEnabled: boolean;
   graphData: GraphData;
+  /** bumped whenever the Vault Index changes — views recompute off it */
+  indexVersion: number;
   viewMode: ViewMode;
 
   // Split View Multi-Pane Support
@@ -159,6 +186,20 @@ interface AppState {
   isAiEnabled: boolean;
   aiIndex: AiIndexEntry[];
   aiApiKey: string | null;
+
+  // Web Clipper
+  isClipperEnabled: boolean;
+  setClipperEnabled: (v: boolean) => Promise<void>;
+  saveClip: (payload: ClipPayload) => Promise<void>;
+
+  // Weekly AI digest
+  isDigestEnabled: boolean;
+  setDigestEnabled: (v: boolean) => void;
+  runWeeklyDigest: () => Promise<void>;
+
+  // Theme
+  theme: ThemeId;
+  setTheme: (id: ThemeId) => void;
 
   // Fun Features
   zenMode: boolean;
@@ -405,6 +446,19 @@ export function applyGraphOverride(
 }
 
 
+/* Find a free path in `dir` for `fileName` — appends " 2", " 3", …
+   before the extension instead of silently overwriting. */
+async function uniquePath(dir: string, fileName: string): Promise<string> {
+  const dot = fileName.lastIndexOf('.');
+  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
+  const ext = dot > 0 ? fileName.slice(dot) : '';
+  let candidate = await join(dir, fileName);
+  for (let i = 2; await exists(candidate); i++) {
+    candidate = await join(dir, `${stem} ${i}${ext}`);
+  }
+  return candidate;
+}
+
 export const useStore = create<AppState>((set, get) => ({
   vaultPath: localStorage.getItem('nopes_vault_path'),
   files: [],
@@ -430,6 +484,7 @@ export const useStore = create<AppState>((set, get) => ({
   isRefreshing: false,
   isAutoSaveEnabled: localStorage.getItem('nopes_autosave_enabled') !== 'false', // default true
   graphData: { nodes: [], links: [] },
+  indexVersion: 0,
   viewMode: 'editor',
   isSplitView: false,
   rightActiveTab: null,
@@ -439,11 +494,81 @@ export const useStore = create<AppState>((set, get) => ({
   aiIndex: [],
   aiApiKey: localStorage.getItem('nopes_ai_key'),
 
+  isClipperEnabled: localStorage.getItem('nopes_clipper_enabled') === 'true', // OFF by default (attack surface)
+  setClipperEnabled: async (v) => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_clipper', { enabled: v, token: getClipperToken() });
+      localStorage.setItem('nopes_clipper_enabled', String(v));
+      set({ isClipperEnabled: v });
+      if (v) toast.success('Web Clipper listening on 127.0.0.1:21787');
+      else toast('Web Clipper stopped', { icon: '🔌' });
+    } catch (e: any) {
+      toast.error(`Clipper: ${e?.message ?? e}`);
+    }
+  },
+  saveClip: async (payload) => {
+    const { vaultPath } = get();
+    if (!vaultPath) return;
+    try {
+      const clipsDir = await join(vaultPath, 'Clips');
+      if (!(await exists(clipsDir))) await mkdir(clipsDir);
+      const path = await uniquePath(clipsDir, clipNoteName(payload.title, new Date()));
+      await writeTextFile(path, buildClipNote(payload, new Date()));
+      toast.success(`Clipped: ${payload.title ?? 'page'}`, { duration: 4000 });
+      await get().loadFiles();
+    } catch (e: any) {
+      toast.error(`Clip failed: ${e?.message ?? e}`);
+    }
+  },
+
+  isDigestEnabled: localStorage.getItem('nopes_digest_enabled') !== 'false', // default on
+  setDigestEnabled: (v) => {
+    localStorage.setItem('nopes_digest_enabled', String(v));
+    set({ isDigestEnabled: v });
+  },
+  runWeeklyDigest: async () => {
+    const { vaultPath, isAiEnabled, isDigestEnabled } = get();
+    if (!vaultPath || !isAiEnabled || !isDigestEnabled) return;
+    try {
+      await get().computeJournalStats();
+      const created = await maybeGenerateDigest({
+        vaultPath,
+        notesModifiedBetween: (from, to) =>
+          vaultIndex.allNotes()
+            .filter(n => n.mtime >= from && n.mtime <= to && !/^Your Week — /.test(n.path.split(/[/\\]/).pop() ?? ''))
+            .map(n => ({
+              name: n.path.split(/[/\\]/).pop()?.replace(/\.md$/, '') ?? 'Note',
+              wordCount: n.wordCount,
+              tags: n.tags,
+            })),
+        journalStats: get().journalStats,
+        openTasks: vaultIndex.allTasks().filter(t => !t.checked).length,
+      });
+      if (created) {
+        toast('📩 Your Week is ready — check your vault', { duration: 6000, icon: '🗞️' });
+        await get().loadFiles();
+      }
+    } catch (e) { console.warn('[NoPes:digest] Generation failed:', e); }
+  },
+
+  theme: initialTheme,
+  setTheme: (id) => {
+    localStorage.setItem('nopes_theme', id);
+    applyThemeToDom(id);
+    set({ theme: id });
+  },
+
   zenMode: false,
   achievements: JSON.parse(localStorage.getItem('nopes_achievements') || '[]'),
   templates: JSON.parse(localStorage.getItem('nopes_templates') || '[]'),
   searchIndex: new Map(),
-  fileMetadata: {},
+  // Loaded eagerly — this is what remembers which files are canvas/kanban
+  // boards; without it every reload demoted them to plain notes.
+  fileMetadata: (() => {
+    try { return JSON.parse(localStorage.getItem('nopes_file_metadata') || '{}'); }
+    catch { return {}; }
+  })(),
   recentFiles: JSON.parse(localStorage.getItem('nopes_recent_files') || '[]'),
 
   setZenMode: (v) => set({ zenMode: v }),
@@ -455,7 +580,7 @@ export const useStore = create<AppState>((set, get) => ({
       localStorage.setItem('nopes_achievements', JSON.stringify(next));
       toast.success(`🏆 Achievement Unlocked: ${title}`, {
         duration: 4000,
-        style: { background: 'var(--accent)', color: '#fff' }
+        style: { background: 'var(--accent)', color: 'var(--accent-contrast)' }
       });
     }
   },
@@ -513,14 +638,32 @@ export const useStore = create<AppState>((set, get) => ({
 
       set({ files: filteredTree, allFiles: filteredFlatList });
       console.log('Scan complete. Found:', filteredFlatList.length, 'notes.');
+
+      // Vault Index: load persisted index once per vault, then reconcile
+      // in the background (reads only new/changed files).
+      (async () => {
+        try {
+          if (indexLoadedFor !== vaultPath) {
+            vaultIndex = await loadPersistedIndex(vaultPath);
+            indexLoadedFor = vaultPath;
+          }
+          await reconcileIndex(vaultPath, vaultIndex, filteredFlatList);
+          // ALWAYS bump: an early autosave can raise indexVersion before
+          // this reconcile finishes — a conditional bump here left views
+          // (Review!) showing the pre-index snapshot until the next save.
+          touchIndex(set);
+        } catch (e) { console.warn('[NoPes:index] Reconcile failed:', e); }
+      })();
       
       // Load AI index from cache if it exists, otherwise build it lazily (if enabled)
       if (get().isAiEnabled) {
         await get().loadAiIndex();
       }
       
-      // Auto-convert any docx found in the scan
+      // Auto-convert any docx found in the scan — skip the archive
+      // folder or every refresh re-converts already-processed docs.
       for (const f of fullFlatList) {
+        if (f.path.includes('_word_archive')) continue;
         if (!f.is_dir && f.name.toLowerCase().endsWith('.docx')) {
           console.log('Auto-converting Word:', f.name);
           await get().convertDocx(f.path, await dirname(f.path), true);
@@ -553,6 +696,15 @@ export const useStore = create<AppState>((set, get) => ({
       } catch { 
         content = ''; 
       }
+      // Heal damaged media embeds (bracket-escaped corpses, raw spaces in
+      // destinations) so the editor re-renders them as real embeds.
+      if (path.toLowerCase().endsWith('.md') && content) {
+        const healed = healMediaEmbeds(content);
+        if (healed !== content) {
+          content = healed;
+          get().saveFile(path, healed); // persist the repair (snapshots first)
+        }
+      }
     }
 
     const name = await basename(path);
@@ -567,11 +719,20 @@ export const useStore = create<AppState>((set, get) => ({
     if (contentToCheck.includes('<!-- CANVAS -->') ||
         contentToCheck.includes('data-canvas="true"')) {
       targetViewMode = 'canvas';
-      console.log(`[openFile] Detected Canvas file: ${path}`);
     } else if (contentToCheck.includes('<!-- KANBAN -->') ||
                contentToCheck.includes('data-kanban="true"')) {
       targetViewMode = 'kanban';
-      console.log(`[openFile] Detected Kanban file: ${path}`);
+    }
+
+    // Persisted metadata as fallback: the editor round-trip strips HTML
+    // comments, so the marker can be missing from a board file. Metadata
+    // remembers what the file really is.
+    const knownType = get().fileMetadata[path]?.itemType;
+    if (targetViewMode === 'editor' && (knownType === 'canvas' || knownType === 'kanban')) {
+      targetViewMode = knownType;
+    } else if (targetViewMode !== 'editor' && knownType !== targetViewMode) {
+      // Marker present but metadata missing/stale — record it.
+      get().setFileMetadata(path, { itemType: targetViewMode as 'canvas' | 'kanban' });
     }
 
     set(state => {
@@ -617,10 +778,32 @@ export const useStore = create<AppState>((set, get) => ({
     });
   },
 
-  setActiveTab: (path) => set({ activeTab: path, viewMode: 'editor' }),
+  setActiveTab: (path) => {
+    // Board files open in their board view, not the raw editor — editing
+    // a canvas/kanban .md as text destroys its marker.
+    const { tabContents, fileMetadata } = get();
+    const c = tabContents[path] ?? '';
+    const t = fileMetadata[path]?.itemType;
+    const viewMode: ViewMode =
+      c.includes('<!-- CANVAS -->') || c.includes('data-canvas="true"') || t === 'canvas' ? 'canvas' :
+      c.includes('<!-- KANBAN -->') || c.includes('data-kanban="true"') || t === 'kanban' ? 'kanban' :
+      'editor';
+    set({ activeTab: path, viewMode });
+  },
 
   saveFile: async (path, content) => {
+    // Self-heal board markers: TipTap drops HTML comments, so a board
+    // file saved through the editor would silently lose its identity.
+    const itemType = get().fileMetadata[path]?.itemType;
+    if (itemType === 'canvas' && !content.includes('<!-- CANVAS -->') && !content.includes('data-canvas="true"')) {
+      content = '<!-- CANVAS -->\n\n' + content;
+    } else if (itemType === 'kanban' && !content.includes('<!-- KANBAN -->') && !content.includes('data-kanban="true"')) {
+      content = '<!-- KANBAN -->\n\n' + content;
+    }
     try {
+      // Version history: preserve the state we're about to overwrite
+      // (rate-limited to one snapshot per note per minute).
+      await maybeSnapshotNote(get().vaultPath, path);
       await writeTextFile(path, content);
       set(state => {
         const activePaths = state.tabs.map(t => t.path);
@@ -631,6 +814,14 @@ export const useStore = create<AppState>((set, get) => ({
         return { tabContents: newContents };
       });
       await get().loadGraphData({ path, text: content });
+
+      // Keep the Vault Index in lockstep with every save
+      if (path.toLowerCase().endsWith('.md')) {
+        vaultIndex.updateNote(path, content);
+        const vp = get().vaultPath;
+        if (vp) schedulePersist(vp, vaultIndex);
+        touchIndex(set);
+      }
     } catch (e: any) { 
       console.error('saveFile error:', e); 
       toast.error('Save failed: ' + (e.message || e));
@@ -643,7 +834,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (!base) return;
     try {
       const fileName = name.endsWith('.md') ? name : `${name}.md`;
-      const newPath = await join(base, fileName);
+      const newPath = await uniquePath(base, fileName);
       await writeTextFile(newPath, '# ' + name);
       await get().loadFiles();
       await get().openFile(newPath);
@@ -686,7 +877,7 @@ export const useStore = create<AppState>((set, get) => ({
     }
     try {
       const fileName = name.endsWith('.md') ? name : `${name}.md`;
-      const newPath = await join(base, fileName);
+      const newPath = await uniquePath(base, fileName);
       const content = template.content.replace(/\$\{name\}/g, name.replace(/\.md$/, ''));
       await writeTextFile(newPath, content);
       await get().loadFiles();
@@ -713,7 +904,9 @@ export const useStore = create<AppState>((set, get) => ({
     const currentContent = tabContents[activeTab] ?? '';
     // Insert at end with a newline separator
     const newContent = currentContent + (currentContent ? '\n\n' : '') + template.content;
-    set({ tabContents: { ...tabContents, [activeTab]: newContent } });
+    // Persist immediately — the editor syncs this without emitting an
+    // update, so autosave would never fire for it.
+    get().saveFile(activeTab, newContent);
     toast.success(`Template "${template.name}" inserted`);
   },
 
@@ -723,7 +916,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (!base) return;
     try {
       const fileName = name.endsWith('.md') ? name : `${name}.md`;
-      const newPath = await join(base, fileName);
+      const newPath = await uniquePath(base, fileName);
       const content = `<!-- CANVAS -->
 
 # ${name.replace(/\.md$/, '')}
@@ -753,7 +946,7 @@ This is a canvas board.
     if (!base) return;
     try {
       const fileName = name.endsWith('.md') ? name : `${name}.md`;
-      const newPath = await join(base, fileName);
+      const newPath = await uniquePath(base, fileName);
       const content = `<!-- KANBAN -->
 
 # ${name.replace(/\.md$/, '')}
@@ -807,15 +1000,11 @@ This is a canvas board.
 
   duplicateFile: async (path) => {
     try {
-      const { readTextFile, writeTextFile } = await import('@tauri-apps/plugin-fs');
-      const { basename, join } = await import('@tauri-apps/api/path');
-
       const content = await readTextFile(path);
       const baseName = await basename(path);
       const nameWithoutExt = baseName.replace(/\.md$/, '');
-      const newName = `${nameWithoutExt} Copy.md`;
-      const dir = path.substring(0, path.lastIndexOf('/') + 1);
-      const newPath = await join(dir, newName);
+      const dir = await dirname(path);
+      const newPath = await uniquePath(dir, `${nameWithoutExt} Copy.md`);
 
       await writeTextFile(newPath, content);
       await get().loadFiles();
@@ -837,20 +1026,18 @@ This is a canvas board.
       // Don't move if already in target
       if (sourcePath === newPath) return;
 
-      // Check if target already exists
+      // Check if target already exists — window.prompt doesn't work in
+      // Tauri's WebView, so resolve the conflict with a unique name.
       const targetExists = await exists(newPath);
       if (targetExists) {
-        const newFileName = window.prompt(
-          `A file named "${fileName}" already exists in this folder.\n\nPlease enter a new name:`,
-          fileName
-        );
-        if (!newFileName || newFileName === fileName) {
-          toast.error('Move cancelled');
-          return;
-        }
-        // Use the new filename
-        const finalPath = await join(targetDir, newFileName);
+        const finalPath = await uniquePath(targetDir, fileName);
+        const newFileName = await basename(finalPath);
         await rename(sourcePath, finalPath);
+        if (sourcePath.toLowerCase().endsWith('.md')) {
+          await moveHistory(get().vaultPath, sourcePath, finalPath);
+          vaultIndex.renameNote(sourcePath, finalPath);
+          touchIndex(set);
+        }
 
         // Update tabs if file was open
         const { tabs, tabContents, activeTab } = get();
@@ -876,6 +1063,11 @@ This is a canvas board.
       }
 
       await rename(sourcePath, newPath);
+      if (sourcePath.toLowerCase().endsWith('.md')) {
+        await moveHistory(get().vaultPath, sourcePath, newPath);
+        vaultIndex.renameNote(sourcePath, newPath);
+        touchIndex(set);
+      }
 
       // Update tabs if file was open
       const { tabs, tabContents, activeTab } = get();
@@ -916,7 +1108,16 @@ This is a canvas board.
 
   deleteItem: async (path) => {
     try {
+      // Deleting a note is the riskiest operation there is — force a
+      // snapshot first so it's recoverable from Version History.
+      if (path.toLowerCase().endsWith('.md')) {
+        await maybeSnapshotNote(get().vaultPath, path, { force: true });
+      }
       await remove(path, { recursive: true });
+      vaultIndex.removeNote(path);
+      const vpDel = get().vaultPath;
+      if (vpDel) schedulePersist(vpDel, vaultIndex);
+      touchIndex(set);
       get().closeTab(path); // in case it's open
       await get().loadFiles();
       await get().loadGraphData();
@@ -934,15 +1135,20 @@ This is a canvas board.
       let finalName = newName.endsWith('.md') || !isMd ? newName : `${newName}.md`;
       const newPath = await join(dir, finalName);
       if (newPath === oldPath) return; // No change
-      
+      if (await exists(newPath)) {
+        toast.error(`"${finalName}" already exists`);
+        return;
+      }
+
       // Get current state BEFORE rename
       const { tabs, tabContents, activeTab, allFiles } = get();
-      
-      // DEBUG: Check if content exists before rename
-      const oldContent = tabContents[oldPath];
-      console.log(`[renameItem] oldPath: ${oldPath}, content exists: ${oldContent !== undefined}, content length: ${oldContent?.length ?? 0}`);
-      
+
       await rename(oldPath, newPath);
+      if (isMd) {
+        await moveHistory(get().vaultPath, oldPath, newPath);
+        vaultIndex.renameNote(oldPath, newPath);
+        touchIndex(set);
+      }
       
       const oldBase = oldPath.split(/[\\/]/).pop()?.replace(/\.md$/, '') ?? '';
       const newBase = finalName.replace(/\.md$/, '');
@@ -952,11 +1158,9 @@ This is a canvas board.
       const newActive = activeTab === oldPath ? newPath : activeTab;
       
       const newTabContents = { ...tabContents };
-      console.log(`[renameItem] Copying content from ${oldPath} to ${newPath}, exists: ${newTabContents[oldPath] !== undefined}`);
       if (newTabContents[oldPath] !== undefined) {
           newTabContents[newPath] = newTabContents[oldPath];
           delete newTabContents[oldPath];
-          console.log(`[renameItem] Content copied, new length: ${newTabContents[newPath]?.length}`);
       }
       
       // 2. Global WikiLink refactoring for the renamed doc!
@@ -1284,17 +1488,21 @@ This is a canvas board.
       } else if (name.toLowerCase().match(/\.(png|jpe?g|gif|webp|mp4|webm|mov|pdf)$/)) {
         const assetsDir = await join(vaultPath, 'assets');
         if (!await exists(assetsDir)) await mkdir(assetsDir);
-        const targetPath = await join(assetsDir, name);
+        let targetPath = await join(assetsDir, name);
+        let finalName = name;
         if (p !== targetPath) {
+          targetPath = await uniquePath(assetsDir, name);
+          finalName = await basename(targetPath);
           const contents = await readFile(p);
           await writeFile(targetPath, contents);
         }
-        const relPath = await join('assets', name);
+        const relPath = await join('assets', finalName);
         get().setPendingAssetInserts([...get().pendingAssetInserts, relPath]);
         toast.success(`Imported media ${name}`);
       } else if (name.toLowerCase().endsWith('.md')) {
-        const targetPath = await join(vaultPath, name);
+        let targetPath = await join(vaultPath, name);
         if (p !== targetPath) {
+          targetPath = await uniquePath(vaultPath, name);
           const content = await readTextFile(p);
           await writeTextFile(targetPath, content);
           toast.success(`Imported ${name}`);
@@ -1434,10 +1642,11 @@ This is a canvas board.
     localStorage.setItem('nopes_recent_files', JSON.stringify(next));
     
     // Also update lastOpened in metadata
-    const { fileMetadata, detectFileType, setFileMetadata } = get();
+    const { fileMetadata, detectFileType, setFileMetadata, tabContents } = get();
     if (!fileMetadata[path]) {
       setFileMetadata(path, {
-        itemType: detectFileType(path),
+        // pass content — without it detection always answers 'note'
+        itemType: detectFileType(path, tabContents[path]),
         iconType: 'emoji',
         lastOpened: Date.now()
       });

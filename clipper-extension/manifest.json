@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "NoPes Web Clipper",
+  "version": "1.0.0",
+  "description": "Clip pages and selections into your local NoPes vault. Everything stays on your machine.",
+  "permissions": ["contextMenus", "storage", "activeTab", "scripting"],
+  "host_permissions": ["http://127.0.0.1:21787/*"],
+  "background": { "service_worker": "background.js" },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Clip this page to NoPes"
+  }
+}

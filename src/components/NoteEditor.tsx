@@ -1,6 +1,8 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useEditor, EditorContent, ReactRenderer, Extension, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
+import TaskList from '@tiptap/extension-task-list';
+import TaskItem from '@tiptap/extension-task-item';
 import LinkExtension from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import Underline from '@tiptap/extension-underline';
@@ -13,8 +15,6 @@ import tippy, { Instance, delegate } from 'tippy.js';
 import 'tippy.js/dist/tippy.css';
 import { MathExtension } from '@aarkue/tiptap-math-extension';
 import 'katex/dist/katex.min.css';
-import { Node } from '@tiptap/core';
-import CodeBlock from '@tiptap/extension-code-block';
 
 // Custom FontSize extension that properly handles font-size styling
 const FontSize = Extension.create({
@@ -60,9 +60,10 @@ import {
   Image as ImageIcon, List, ListOrdered, Quote, Code, MoreHorizontal,
   Minus, FileText, Underline as UnderlineIcon, Palette, Sparkles, Hash, Trash2,
   Search, X as XIcon, ChevronUp, ChevronDown,
-  Grid3x3, LayoutTemplate, GitBranch,
-  RowsIcon, Columns, Trash, TableIcon, ChevronLeft, ChevronRight, Printer, Focus
+  Grid3x3, LayoutTemplate, GitBranch, CheckSquare,
+  RowsIcon, Columns, Trash, TableIcon, ChevronLeft, ChevronRight, Printer, Focus, History
 } from 'lucide-react';
+import { HistoryModal } from './HistoryModal';
 import { useStore, extractTags } from '../store/useStore';
 import { writeFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
@@ -71,20 +72,37 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, readTextFile } from '@tauri-apps/plugin-fs';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { disposeEditorInstance } from './editorLifecycle';
+import { isDarkTheme } from '../themes';
+import { findUnlinkedMentions, linkMentions } from '../mentions';
+import { MermaidNode } from '../extensions/MermaidNode';
+import { QueryBlockNode } from '../extensions/QueryBlock';
+import { runQuery, noteName as queryNoteName } from '../queryEngine';
+import { getVaultIndex } from '../store/useStore';
+import { filterLinkSuggestions, loadDismissed, addDismissed, LinkSuggestion } from '../linkSuggestions';
+import { VoiceMemoButton } from './VoiceMemo';
+import { recognizeImage } from '../ocr';
+import { prepareCloneForPdf, bytesToDataUrl } from '../exportUtils';
+import { safeDecodeSrc, encodeMediaSrc, sanitizeImportFileName } from '../extensions/imageMarkdown';
 
 const COMBO_RESET_MS = 2000;
 
-// Lazy init mermaid
+// Lazy init mermaid — re-initialized whenever the app theme flips
+// between dark and light so new renders match the active theme.
 let mermaidInstance: any = null;
+let mermaidDark: boolean | null = null;
 const initMermaid = async () => {
+  const dark = isDarkTheme(useStore.getState().theme);
   if (!mermaidInstance) {
     const m = await import('mermaid');
     mermaidInstance = m.default || m;
+  }
+  if (mermaidDark !== dark) {
+    mermaidDark = dark;
     mermaidInstance.initialize({
       startOnLoad: false,
-      theme: 'dark',
-      darkMode: true,
-      fontFamily: 'Inter, sans-serif',
+      theme: dark ? 'dark' : 'default',
+      darkMode: dark,
+      fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
       fontSize: 14,
     });
   }
@@ -114,8 +132,30 @@ const resolveAssetSrc = (relPath: string): string => {
 
 const NopesImage = Image.extend({
   addNodeView() {
-    return ({ node }) => {
-      const relPath = node.attrs.src || '';
+    return ({ node, editor, getPos }: any) => {
+      // docs store percent-encoded srcs (markdown-safe); files need raw
+      const relPath = safeDecodeSrc(node.attrs.src || '');
+
+      /* A media reference that points nowhere (moved file, or a dead
+         temp reference like blob:/hex names from a bad paste) must say
+         so clearly — not render as an empty box or a cryptic string. */
+      const swapForMissing = (host: HTMLElement, kind: string) => {
+        host.innerHTML = '';
+        const ph = document.createElement('div');
+        ph.setAttribute('contenteditable', 'false');
+        ph.style.cssText = 'padding:14px 16px;border:1px dashed var(--red);border-radius:8px;color:var(--red);font-size:12.5px;margin:1rem 0;line-height:1.6;';
+        ph.textContent = `⚠ ${kind} file not found: ${relPath} — drag the file into the note again to re-embed it.`;
+        host.appendChild(ph);
+      };
+      const verifyExists = (host: HTMLElement, kind: string) => {
+        if (relPath.startsWith('http') || relPath.startsWith('data:')) return;
+        const vault = useStore.getState().vaultPath;
+        if (!vault) return;
+        const sep = vault.includes('\\') ? '\\' : '/';
+        exists(`${vault}${sep}${relPath}`)
+          .then(ok => { if (!ok) swapForMissing(host, kind); })
+          .catch(() => {});
+      };
       const isPdf  = /\.pdf$/i.test(relPath);
       const isVideo = /\.(mp4|webm|mov)$/i.test(relPath);
 
@@ -133,6 +173,7 @@ const NopesImage = Image.extend({
         wrapper.appendChild(loader);
         
         const iframe = document.createElement('iframe');
+        iframe.dataset.relPath = relPath;
         iframe.src = resolveAssetSrc(relPath);
         iframe.style.cssText = 'width:100%;height:80vh;border:none;display:block;border-radius:8px;position:relative;z-index:2;';
         iframe.setAttribute('title', relPath.split(/[\/\\]/).pop() || 'PDF');
@@ -141,6 +182,7 @@ const NopesImage = Image.extend({
         iframe.onerror = () => { loader.textContent = 'Failed to load PDF'; };
         
         wrapper.appendChild(iframe);
+        verifyExists(wrapper, 'PDF');
         dom = wrapper;
       } else if (isVideo) {
         // ── Video: native <video> with controls ──────────────────────
@@ -149,6 +191,7 @@ const NopesImage = Image.extend({
         
         dom = document.createElement('video');
         const vid = dom as HTMLVideoElement;
+        vid.dataset.relPath = relPath;
         vid.src = resolveAssetSrc(relPath);
         vid.controls = true;
         vid.loop = false;
@@ -160,21 +203,66 @@ const NopesImage = Image.extend({
         };
         
         wrapper.appendChild(vid);
+        verifyExists(wrapper, 'Video');
         dom = wrapper;
       } else {
-        // ── Image ────────────────────────────────────────────────────
-        dom = document.createElement('img');
-        const img = dom as HTMLImageElement;
+        // ── Image (with on-demand local OCR) ────────────────────────
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position:relative;margin:1rem 0;display:block;';
+
+        const img = document.createElement('img');
+        img.dataset.relPath = relPath;
         img.src = resolveAssetSrc(relPath);
         img.setAttribute('loading', 'lazy'); // Lazy load for performance
         if (node.attrs.alt)   img.alt   = node.attrs.alt;
         if (node.attrs.title) img.title = node.attrs.title;
-        img.style.cssText = 'max-width:100%;border-radius:8px;margin:1rem 0;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;transition:opacity 0.3s;';
+        img.style.cssText = 'max-width:100%;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,0.4);display:block;transition:opacity 0.3s;';
         img.onload = () => { img.style.opacity = '1'; };
         img.onerror = () => {
           img.style.opacity = '0.3';
           img.alt = `⚠ Image not found: ${relPath}`;
         };
+        wrapper.appendChild(img);
+
+        const ocrBtn = document.createElement('button');
+        ocrBtn.className = 'image-ocr-btn';
+        ocrBtn.textContent = '🔍 OCR';
+        ocrBtn.title = 'Extract text from this image (100% on-device)';
+        ocrBtn.onclick = async (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          ocrBtn.textContent = '⏳ Reading…';
+          ocrBtn.disabled = true;
+          try {
+            // Read the actual bytes (asset:// URLs aren't always fetchable)
+            let source: Blob | string;
+            if (relPath.startsWith('data:') || relPath.startsWith('http')) {
+              source = relPath;
+            } else {
+              const vault = useStore.getState().vaultPath;
+              if (!vault) throw new Error('No vault open');
+              const sep = vault.includes('\\') ? '\\' : '/';
+              const bytes = await readFile(`${vault}${sep}${relPath}`);
+              source = new Blob([bytes]);
+            }
+            const text = await recognizeImage(source);
+            if (!text) {
+              import('react-hot-toast').then(m => m.toast('No readable text found in this image.', { icon: '🔍' }));
+            } else if (editor && !editor.isDestroyed && typeof getPos === 'function') {
+              const quoted = text.split('\n').map((l: string) => `> ${l}`).join('\n');
+              editor.chain().insertContentAt(getPos() + node.nodeSize, `\n${quoted}\n`).run();
+              import('react-hot-toast').then(m => m.toast.success('Text extracted below the image'));
+            }
+          } catch (e: any) {
+            console.error('[NoPes:OCR]', e);
+            import('react-hot-toast').then(m => m.toast.error(`OCR failed: ${e?.message ?? e}`));
+          } finally {
+            ocrBtn.textContent = '🔍 OCR';
+            ocrBtn.disabled = false;
+          }
+        };
+        wrapper.appendChild(ocrBtn);
+        verifyExists(wrapper, 'Image');
+        dom = wrapper;
       }
 
       return { dom } as any;
@@ -187,6 +275,7 @@ const NopesImage = Image.extend({
 ───────────────────────────────────────────── */
 const MermaidView = (props: any) => {
   const code = props.node.attrs.code || '';
+  const theme = useStore(s => s.theme);
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [showCode, setShowCode] = useState(false);
@@ -206,7 +295,7 @@ const MermaidView = (props: any) => {
     };
     renderDiagram();
     return () => { active = false; };
-  }, [code, id]);
+  }, [code, id, theme]);
 
   const onCodeChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     props.updateAttributes({ code: e.target.value });
@@ -236,66 +325,105 @@ const MermaidView = (props: any) => {
   );
 };
 
-const MermaidExtension = Node.create({
-  name: 'mermaidNode',
-  group: 'block',
-  atom: true,
-  addAttributes() {
-    return { code: { default: '' } };
-  },
-  parseHTML() {
-    return [
-      {
-        tag: 'pre',
-        getAttrs: (node: string | HTMLElement) => {
-          const dom = node as HTMLElement;
-          const codeEl = dom.querySelector('code');
-          if (codeEl && codeEl.className.includes('language-mermaid')) {
-             return { code: codeEl.textContent };
-          }
-          return false;
-        }
-      }
-    ];
-  },
-  renderHTML({ HTMLAttributes }: any) {
-    return ['pre', {}, ['code', { class: 'language-mermaid' }, HTMLAttributes.code]];
-  },
+/* ─────────────────────────────────────────────
+   Properties bar — read-only frontmatter chips.
+   Read-only on purpose: rewriting frontmatter through the editor is a
+   data-risk path; the bar reflects what the Vault Index parsed.
+───────────────────────────────────────────── */
+const PropertiesBar: React.FC<{ notePath: string | null }> = ({ notePath }) => {
+  const indexVersion = useStore(st => st.indexVersion);
+  const props = React.useMemo(() => {
+    void indexVersion;
+    if (!notePath) return {} as Record<string, string>;
+    return getVaultIndex().get(notePath)?.frontmatter ?? {};
+  }, [notePath, indexVersion]);
+
+  const entries = Object.entries(props);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="properties-bar" contentEditable={false}>
+      {entries.map(([k, v]) => (
+        <span key={k} className="property-chip" title={`${k}: ${v}`}>
+          <span className="property-key">{k}</span>
+          <span className="property-value">{v}</span>
+        </span>
+      ))}
+    </div>
+  );
+};
+
+/* ─────────────────────────────────────────────
+   Live Query Block (```nopes-query```)
+───────────────────────────────────────────── */
+const QueryBlockView = (props: any) => {
+  const query = props.node.attrs.query || '';
+  const indexVersion = useStore(st => st.indexVersion);
+  const [showSource, setShowSource] = useState(!query);
+
+  const results = React.useMemo(() => {
+    void indexVersion;
+    try { return runQuery(getVaultIndex().allNotes(), query); }
+    catch { return []; }
+  }, [query, indexVersion]);
+
+  return (
+    <NodeViewWrapper className="query-block">
+      <div className="query-topbar" contentEditable={false}>
+        <div className="mermaid-label"><Search size={12} /> Query{query ? `: ${query}` : ''}</div>
+        <button className="mermaid-toggle" onClick={() => setShowSource(v => !v)}>
+          {showSource ? 'Hide' : 'Edit'}
+        </button>
+      </div>
+      {showSource && (
+        <input
+          className="query-input"
+          placeholder="tag=#project status=active has=tasks sort=modified limit=10"
+          defaultValue={query}
+          onKeyDown={e => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+              props.updateAttributes({ query: (e.target as HTMLInputElement).value.trim() });
+              setShowSource(false);
+            }
+          }}
+          onBlur={e => props.updateAttributes({ query: e.target.value.trim() })}
+        />
+      )}
+      <div className="query-results" contentEditable={false}>
+        {results.length === 0 ? (
+          <div className="query-empty">{query ? 'No matching notes.' : 'Type a query and press Enter.'}</div>
+        ) : results.map(entry => (
+          <button
+            key={entry.path}
+            className="query-result"
+            onClick={() => useStore.getState().openFile(entry.path)}
+          >
+            <FileText size={12} />
+            <span className="query-result-name">{queryNoteName(entry)}</span>
+            <span className="query-result-meta">
+              {entry.wordCount}w{entry.tasks.length > 0 ? ` · ${entry.tasks.filter(t => !t.checked).length} open tasks` : ''}
+              {entry.mtime ? ` · ${new Date(entry.mtime).toLocaleDateString()}` : ''}
+            </span>
+          </button>
+        ))}
+      </div>
+    </NodeViewWrapper>
+  );
+};
+
+const QueryBlockExtension = QueryBlockNode.extend({
   addNodeView() {
-    return ReactNodeViewRenderer(MermaidView);
-  }
+    return ReactNodeViewRenderer(QueryBlockView);
+  },
 });
 
-// Extend CodeBlock to render mermaid diagrams with the MermaidView
-const MermaidCodeBlock = CodeBlock.extend({
+/* Schema in src/extensions/MermaidNode.ts (headlessly testable);
+   the React node view is attached here. */
+const MermaidExtension = MermaidNode.extend({
   addNodeView() {
-    return ReactNodeViewRenderer((props: any) => {
-      const language = props.node.attrs.language;
-      // Get text content from the node
-      const code = props.node.textContent || '';
-      
-      if (language === 'mermaid') {
-        // Use the mermaid renderer for mermaid code blocks
-        // Create a fake props object that matches what MermaidView expects
-        const mermaidProps = {
-          ...props,
-          node: {
-            ...props.node,
-            attrs: { code }
-          }
-        };
-        return <MermaidView {...mermaidProps} />;
-      }
-      // Default code block rendering for other languages
-      return (
-        <NodeViewWrapper>
-          <pre className="mermaid-source">
-            <code>{code}</code>
-          </pre>
-        </NodeViewWrapper>
-      );
-    });
-  }
+    return ReactNodeViewRenderer(MermaidView);
+  },
 });
 
 
@@ -345,7 +473,9 @@ const WikiLinkExtension = Extension.create({
 ─────────────────────────────────────────── */
 const today = () => new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
-const TEMPLATES: Record<string, string> = {
+// Computed on demand — a module-level constant would bake in the date
+// at app launch and go stale after midnight.
+const getTemplates = (): Record<string, string> => ({
   'Daily Note': `## 🗓️ ${today()}
 
 ### Intentions
@@ -428,11 +558,11 @@ const TEMPLATES: Record<string, string> = {
 
 
 ### 🔭 Next Week Focus
-1. 
-2. 
-3. 
+1.
+2.
+3.
 `,
-};
+});
 
 /* ─────────────────────────────────────────────
    Slash Commands
@@ -444,6 +574,7 @@ const COMMAND_ITEMS = [
   { title: 'Heading 3',     group: 'Format', icon: <Heading3 size={14} />,     command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run() },
   { title: 'Bold',          group: 'Format', icon: <Bold size={14} />,         command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setMark('bold').run() },
   { title: 'Italic',        group: 'Format', icon: <Italic size={14} />,       command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setMark('italic').run() },
+  { title: 'Task List',     group: 'Format', icon: <CheckSquare size={14} />,  command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleTaskList().run() },
   { title: 'Bullet List',   group: 'Format', icon: <List size={14} />,         command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleBulletList().run() },
   { title: 'Numbered List', group: 'Format', icon: <ListOrdered size={14} />,  command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleOrderedList().run() },
   { title: 'Quote',         group: 'Format', icon: <Quote size={14} />,        command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).toggleBlockquote().run() },
@@ -451,13 +582,16 @@ const COMMAND_ITEMS = [
   { title: 'Divider',       group: 'Format', icon: <Minus size={14} />,        command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).setHorizontalRule().run() },
   // ─ Inserts
   { title: 'Table',         group: 'Insert', icon: <Grid3x3 size={14} />,      command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertTable({ rows: 1, cols: 2, withHeaderRow: false }).run() },
-  { title: 'Mermaid Diagram', group: 'Insert', icon: <GitBranch size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent('```mermaid\ngraph TD\n    A[Start] --> B{Decision}\n    B -->|Yes| C[Result 1]\n    B -->|No| D[Result 2]\n```\n').run() },
+  { title: 'Flashcard',     group: 'Insert', icon: <GitBranch size={14} />,   command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent('Question ?? Answer').run() },
+  { title: 'Query Block',   group: 'Insert', icon: <Search size={14} />,       command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent({ type: 'queryBlock', attrs: { query: '' } }).run() },
+  { title: 'Mermaid Diagram', group: 'Insert', icon: <GitBranch size={14} />, command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent({ type: 'mermaidNode', attrs: { code: 'graph TD\n    A[Start] --> B{Decision}\n    B -->|Yes| C[Result 1]\n    B -->|No| D[Result 2]' } }).run() },
   // ─ Templates
-  ...Object.entries(TEMPLATES).map(([title, content]) => ({
+  ...Object.keys(getTemplates()).map((title) => ({
     title,
     group: 'Template',
     icon: <LayoutTemplate size={14} />,
-    command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent(content + '\n').run(),
+    // resolve the template at insert time so dates are current
+    command: ({ editor, range }: any) => editor.chain().focus().deleteRange(range).insertContent(getTemplates()[title] + '\n').run(),
   })),
 ];
 
@@ -815,6 +949,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [existingLink, setExistingLink] = useState<string | undefined>();
   const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
+  const [suggestedLinks, setSuggestedLinks] = useState<LinkSuggestion[]>([]);
   const [aiStatus, setAiStatus] = useState('idle');
   const allFilesRef = useRef(allFiles);
   const tabContentsRef = useRef(tabContents);
@@ -823,6 +958,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
 
   // ── In-note search state ──────────────────────────────────────────────
   const [showSearch, setShowSearch] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMatchIndex, setSearchMatchIndex] = useState(0);
   const [searchMatchCount, setSearchMatchCount] = useState(0);
@@ -832,8 +968,9 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const comboTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastDocSizeRef = useRef(-1); // -1 = uninitialised (set after editor ready)
 
-  const storeActionsRef = useRef({ openFile, createFile });
-  useEffect(() => { storeActionsRef.current = { openFile, createFile }; }, [openFile, createFile]);
+  const storeActionsRef = useRef({ openFile, createFile, saveFile });
+  const importFileObjectsRef = useRef<((files: FileList) => Promise<void>) | null>(null);
+  useEffect(() => { storeActionsRef.current = { openFile, createFile, saveFile }; }, [openFile, createFile, saveFile]);
 
   const content = currentTab ? (tabContents[currentTab] ?? '') : '';
   useEffect(() => { allFilesRef.current = allFiles; }, [allFiles]);
@@ -852,8 +989,16 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const isTopSecret = tags.includes('topsecret');
 
   const fileName = currentTab?.split('/').pop()?.replace(/\.md$/, '') ?? 'Untitled';
-  const backlinks = graphData.links.filter(l => l.target === currentTab);
-  const backlinksFiles = backlinks.map(l => allFiles.find(f => f.path === l.source)).filter((f): f is any => Boolean(f));
+  // Memoized + endpointId-safe: force-graph mutates link.source/target
+  // into node objects, and an unstable array identity here used to make
+  // the unlinked-mentions effect re-read the vault on every render.
+  const backlinksFiles = useMemo(() => {
+    const endpointId = (e: any) => (typeof e === 'object' && e !== null ? e.id : e);
+    const sources = new Set(
+      graphData.links.filter(l => endpointId(l.target) === currentTab).map(l => endpointId(l.source))
+    );
+    return allFiles.filter(f => sources.has(f.path));
+  }, [graphData.links, allFiles, currentTab]);
 
   // AI Tag Suggestions
   useEffect(() => {
@@ -880,12 +1025,19 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
         const currentTags = new Set(extractTags(content));
         const newTags = Array.from(tags).filter(t => !currentTags.has(t)).slice(0, 4);
         setSuggestedTags(newTags);
+
+        // AI auto-linking: the same semantic hits, filtered down to
+        // "related notes you haven't linked yet".
+        setSuggestedLinks(filterLinkSuggestions(
+          hits, currentTab ?? null, content, currentTab ? loadDismissed(currentTab) : new Set(),
+        ));
       } catch {}
     }, 1500);
     return () => clearTimeout(to);
   }, [content, aiIndex, aiStatus, currentTab]);
 
-  const [unlinkedMentions, setUnlinkedMentions] = useState<typeof allFiles>([]);
+  interface UnlinkedHit { file: (typeof allFiles)[number]; count: number; snippet: string }
+  const [unlinkedMentions, setUnlinkedMentions] = useState<UnlinkedHit[]>([]);
 
   useEffect(() => {
     if (!currentTab || !fileName) {
@@ -893,29 +1045,47 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       return;
     }
     let cancel = false;
+    const MAX_SCAN = 500;
     const computeUnlinked = async () => {
-      const mentions: typeof allFiles = [];
-      const lowerName = fileName.toLowerCase();
+      const hits: UnlinkedHit[] = [];
       const cachedContents = tabContentsRef.current;
-      
-      for (const f of allFiles) {
+
+      for (const f of allFiles.slice(0, MAX_SCAN)) {
+        if (cancel) return;
         if (f.path === currentTab) continue;
-        if (backlinksFiles.find(b => b.path === f.path)) continue;
-        
+
         let text = cachedContents[f.path];
         if (text === undefined) {
            try { text = await readTextFile(f.path); } catch { text = ''; }
         }
-        
-        if (text.toLowerCase().includes(lowerName)) {
-           mentions.push(f);
+
+        const mentions = findUnlinkedMentions(text, fileName);
+        if (mentions.length > 0) {
+          hits.push({ file: f, count: mentions.length, snippet: mentions[0].snippet });
         }
       }
-      if (!cancel) setUnlinkedMentions(mentions);
+      if (!cancel) setUnlinkedMentions(hits);
     };
-    computeUnlinked();
-    return () => { cancel = true; };
-  }, [currentTab, fileName, allFiles, backlinksFiles]);
+    // Debounced: don't hammer the disk while the user flips through notes
+    const t = setTimeout(computeUnlinked, 800);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [currentTab, fileName, allFiles]);
+
+  const linkMention = async (hit: UnlinkedHit) => {
+    try {
+      const cached = tabContentsRef.current[hit.file.path];
+      const text = cached !== undefined ? cached : await readTextFile(hit.file.path);
+      const { content: linkedContent, linked } = linkMentions(text, fileName);
+      if (linked === 0) return;
+      await storeActionsRef.current.saveFile(hit.file.path, linkedContent);
+      setUnlinkedMentions(prev => prev.filter(h => h.file.path !== hit.file.path));
+      import('react-hot-toast').then(m =>
+        m.toast.success(`Linked ${linked} mention${linked > 1 ? 's' : ''} in "${hit.file.name.replace(/\.md$/, '')}"`)
+      );
+    } catch (e: any) {
+      import('react-hot-toast').then(m => m.toast.error(`Could not link: ${e?.message ?? e}`));
+    }
+  };
 
   const insertImage = async (editor: ReturnType<typeof useEditor>) => {
     if (!editor) return;
@@ -938,13 +1108,17 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const editor = useEditor(
     {
       extensions: [
-        StarterKit.configure({ codeBlock: false }), // Use custom MermaidCodeBlock instead
+        StarterKit, // native codeBlock: editable, contentDOM-backed, serialize-safe
+        TaskList,
+        TaskItem.configure({ nested: true }),
         Table.configure({ resizable: true }),
         TableRow,
         TableHeader,
         TableCell,
-        MermaidCodeBlock,
         MermaidExtension,
+        QueryBlockExtension,
+        MermaidExtension,
+        QueryBlockExtension,
         MathExtension.configure({ evaluation: false }),
         FoldingExtension,
         Underline,
@@ -1074,6 +1248,22 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
         attributes: {
           spellcheck: 'false',
         },
+        // Files must NEVER be handled by ProseMirror's defaults: WebKit
+        // hands it temp-file references (random hex names) that break on
+        // restart. Returning true blocks PM; the events still bubble to
+        // our importer (drop) or we import directly (paste).
+        handleDrop: (_view, event) => {
+          if (event.dataTransfer?.files?.length) return true;
+          return false;
+        },
+        handlePaste: (_view, event) => {
+          const files = event.clipboardData?.files;
+          if (files && files.length > 0) {
+            importFileObjectsRef.current?.(files);
+            return true;
+          }
+          return false;
+        },
       },
     },
     [currentTab],
@@ -1085,10 +1275,21 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       editorRef.current = editor;
     }
     return () => {
-      // Cancel any pending autosave to prevent writes to a dead editor
+      // A pending autosave means unsaved keystrokes — flush them now,
+      // BEFORE the editor is destroyed, or the last <400ms of typing is
+      // lost when switching views (e.g. editor → Kanban).
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
+        try {
+          const ed = editorRef.current;
+          if (ed && !ed.isDestroyed && currentTab) {
+            const md = (ed.storage as any).markdown?.getMarkdown?.();
+            if (typeof md === 'string') saveFile(currentTab, md);
+          }
+        } catch (e) {
+          console.warn('[NoteEditor] Flush-on-unmount failed:', e);
+        }
       }
       // Cancel combo timer to prevent setState-after-unmount
       if (comboTimerRef.current) {
@@ -1109,7 +1310,11 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
     if (!editor || editor.isDestroyed) return;
     try {
       const curr = (editor.storage as any).markdown?.getMarkdown?.() ?? '';
-      if (curr !== content) {
+      // TipTap drops the <!-- CANVAS/KANBAN --> marker comment, and
+      // saveFile re-prepends it — normalize both sides so that round
+      // trip doesn't register as a perpetual external change.
+      const stripMarker = (s: string) => s.replace(/^<!--\s*(CANVAS|KANBAN)\s*-->\s*/i, '');
+      if (stripMarker(curr) !== stripMarker(content)) {
         editor.commands.setContent(preprocessMath(content), { emitUpdate: false } as any);
       }
       // Initialise / reset the baseline doc size for the combo guard
@@ -1119,13 +1324,15 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
     }
   }, [currentTab, content]);
 
-  // Auto-insert dragged assets
+  // Auto-insert dragged assets — only in the active (left) editor, or
+  // split view inserts every asset into both panes.
   useEffect(() => {
+    if (currentTab !== useStore.getState().activeTab) return;
     if (editor && !editor.isDestroyed && pendingAssetInserts.length > 0) {
       try {
         pendingAssetInserts.forEach(pth => {
           // TipTap Image Extension syntax -> inserts the logical path natively into the doc.
-          editor.chain().focus().setImage({ src: pth }).run();
+          editor.chain().focus().setImage({ src: encodeMediaSrc(pth) }).run();
         });
       } catch (e) {
         console.warn('[NoteEditor] Failed to insert dragged assets:', e);
@@ -1147,12 +1354,11 @@ const handleDragLeave = () => setIsDragOver(false);
 
 const [isImporting, setIsImporting] = useState(false);
 
-const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
-  e.preventDefault();
-  setIsDragOver(false);
-  const files = e.dataTransfer?.files;
-  if (!files || files.length === 0) return;
-  
+/** Import browser File objects into assets/ and queue editor inserts.
+    Shared by drag-drop and paste so BOTH paths produce real vault files —
+    ProseMirror's default handling would otherwise insert WebKit's
+    temporary file references (random hex names) that die on restart. */
+const importFileObjects = async (files: FileList) => {
   setIsImporting(true);
   try {
     const assetsDir = await join(useStore.getState().vaultPath || '', 'assets');
@@ -1167,7 +1373,7 @@ const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
       try {
         const arrayBuf = await file.arrayBuffer();
         const uint8 = new Uint8Array(arrayBuf);
-        const uniqueName = `${Date.now()}_${file.name}`;
+        const uniqueName = `${Date.now()}_${sanitizeImportFileName(file.name)}`;
         const targetPath = await join(assetsDir, uniqueName);
         await writeFile(targetPath, uint8);
         const relPath = 'assets/' + uniqueName;
@@ -1193,6 +1399,15 @@ const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     setIsImporting(false);
   }
 };
+
+const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+  e.preventDefault();
+  setIsDragOver(false);
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+  await importFileObjects(files);
+};
+importFileObjectsRef.current = importFileObjects;
 
 // ── Context menu for media elements ───────────────────────
 type CtxMenu = { x: number; y: number; domNode: HTMLElement } | null;
@@ -1452,6 +1667,8 @@ useEffect(() => {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'f' && currentTab) {
+        // In split view both editors hear this — only the active one opens
+        if (currentTab !== useStore.getState().activeTab) return;
         e.preventDefault();
         setShowSearch(true);
       }
@@ -1485,6 +1702,29 @@ useEffect(() => {
     document.addEventListener('keydown', spawnParticle);
     return () => document.removeEventListener('keydown', spawnParticle);
   }, [zenMode]);
+
+  // ── Zen mode: typewriter scrolling — keep the caret vertically centered ──
+  useEffect(() => {
+    if (!zenMode || !editor || editor.isDestroyed) return;
+    const centerCaret = () => {
+      try {
+        const view = editor.view;
+        const coords = view.coordsAtPos(view.state.selection.head);
+        // scope to THIS editor's scroller (split view has two)
+        const scroller = view.dom.closest('.editor-scroll') as HTMLElement | null;
+        if (!scroller) return;
+        const rect = scroller.getBoundingClientRect();
+        const delta = coords.top - (rect.top + rect.height / 2);
+        if (Math.abs(delta) > 8) scroller.scrollTop += delta;
+      } catch { /* editor transitioning */ }
+    };
+    editor.on('selectionUpdate', centerCaret);
+    editor.on('update', centerCaret);
+    return () => {
+      editor.off('selectionUpdate', centerCaret);
+      editor.off('update', centerCaret);
+    };
+  }, [zenMode, editor]);
 
   // Ref to track cleanup functions for tippy delegate & click handler
   const tippyCleanupRef = useRef<(() => void) | null>(null);
@@ -1563,39 +1803,84 @@ useEffect(() => {
           <span className={`save-status ${saving ? 'saving' : ''}`}>{saving ? 'Saving…' : 'Saved'}</span>
           <button className="icon-btn sm" onClick={async (e) => { 
             e.preventDefault(); e.stopPropagation();
+            const el = document.querySelector('.ProseMirror');
+            if (!el) return;
             try {
-              const el = document.querySelector('.ProseMirror');
-              if (!el) return;
-              
-              // Add a temporary print class to ensure dark mode text shows up or handle styling
+              // Force print-friendly colors while html2canvas snapshots —
+              // dark-theme text would otherwise render light-on-white.
+              el.classList.add('pdf-export');
+
+              // html2canvas can't render asset:// images (canvas taint →
+              // blank export) — inline every vault image as a data URL first.
+              const imageDataUrls = new Map<string, string>();
+              const vault = useStore.getState().vaultPath;
+              if (vault) {
+                const sep = vault.includes('\\') ? '\\' : '/';
+                const imgs = Array.from(el.querySelectorAll('img[data-rel-path]')) as HTMLElement[];
+                for (const img of imgs) {
+                  const rel = img.dataset.relPath!;
+                  if (rel.startsWith('data:') || rel.startsWith('http')) continue;
+                  try {
+                    const bytes = await readFile(`${vault}${sep}${rel}`);
+                    imageDataUrls.set(rel, bytesToDataUrl(bytes, rel));
+                  } catch { /* missing file → placeholder in the clone */ }
+                }
+              }
+
               const opt = {
                 margin: 10,
                 filename: `${fileName}.pdf`,
                 image: { type: 'jpeg' as const, quality: 0.98 },
-                html2canvas: { scale: 2, useCORS: true },
+                html2canvas: {
+                  scale: 2,
+                  useCORS: true,
+                  // Swap unrenderable media (iframes/videos/asset imgs) in the
+                  // CLONE html2canvas actually rasterizes.
+                  onclone: (clonedDoc: Document) => prepareCloneForPdf(clonedDoc, imageDataUrls),
+                },
                 jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
               };
-              
+
               // Request raw ArrayBuffer to circumvent WKWebView Blob <a> tag blocking
               const pdfArrayBuffer = await html2pdf().set(opt as any).from(el as HTMLElement).outputPdf('arraybuffer');
-              
+
               // Prompt user for save location
               const filePath = await save({
                 filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
                 defaultPath: `${fileName}.pdf`,
                 title: 'Export Virtual PDF',
               });
-              
+
               if (filePath) {
                 const uint8Array = new Uint8Array(pdfArrayBuffer);
                 await writeFile(filePath, uint8Array);
                 import('react-hot-toast').then(m => m.toast.success('Successfully exported PDF!'));
               }
-            } catch (err) {
+            } catch (err: any) {
               console.error("PDF Export failed", err);
+              import('react-hot-toast').then(m => m.toast.error(`PDF export failed: ${err?.message ?? err}`));
+            } finally {
+              el.classList.remove('pdf-export');
             }
           }} title="Export to PDF (Print)">
             <Printer size={15} />
+          </button>
+          <VoiceMemoButton
+            onResult={(transcript, audioRelPath) => {
+              if (!editor || editor.isDestroyed) return;
+              const parts = [
+                transcript ? `> \u{1F399}\u{FE0F} ${transcript}` : null,
+                `[voice memo](${audioRelPath})`,
+              ].filter(Boolean).join('\n\n');
+              editor.chain().focus('end').insertContent(`\n${parts}\n`).run();
+            }}
+          />
+          <button
+            className={`icon-btn sm ${showHistory ? 'is-active' : ''}`}
+            title="Version history"
+            onClick={() => setShowHistory(true)}
+          >
+            <History size={15} />
           </button>
           <button
             className={`icon-btn sm ${showSearch ? 'is-active' : ''}`}
@@ -1663,16 +1948,45 @@ useEffect(() => {
             <div key={stampLabel} className="note-stamp" data-stamp={stampLabel}>{stampLabel}</div>
           )}
           <div className="note-title">{isTopSecret ? `🔒 ${fileName}` : fileName}</div>
+          <PropertiesBar notePath={currentTab} />
           <EditorContent editor={editor} />
           
-          {(backlinksFiles.length > 0 || unlinkedMentions.length > 0) && (
+          {(backlinksFiles.length > 0 || unlinkedMentions.length > 0 || suggestedTags.length > 0 || suggestedLinks.length > 0) && (
             <div className="backlinks-pane">
               
-              {suggestedTags.length > 0 && (
+              {(suggestedTags.length > 0 || suggestedLinks.length > 0) && (
                 <div className="ai-tag-suggestions">
                   <div className="backlinks-header" style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--accent)' }}>
                     <Sparkles size={12} /> AI Suggestions
                   </div>
+                  {suggestedLinks.length > 0 && (
+                    <div className="ai-links-row">
+                      {suggestedLinks.map(sug => (
+                        <span key={sug.path} className="ai-link-chip">
+                          <button
+                            className="ai-link-chip-main"
+                            title={`Insert [[${sug.label}]] — related note (similarity ${(sug.score * 100).toFixed(0)}%)`}
+                            onClick={() => {
+                              if (editor) editor.chain().focus('end').insertContent(`\n[[${sug.label}]] `).run();
+                              setSuggestedLinks(prev => prev.filter(x => x.path !== sug.path));
+                            }}
+                          >
+                            <LinkIcon size={11} /> [[{sug.label}]]
+                          </button>
+                          <button
+                            className="ai-link-chip-dismiss"
+                            title="Don't suggest this link for this note again"
+                            onClick={() => {
+                              if (currentTab) addDismissed(currentTab, sug.path);
+                              setSuggestedLinks(prev => prev.filter(x => x.path !== sug.path));
+                            }}
+                          >
+                            <XIcon size={10} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="ai-tags-row">
                     {suggestedTags.map(t => (
                       <button 
@@ -1703,9 +2017,23 @@ useEffect(() => {
               {unlinkedMentions.length > 0 && (
                 <>
                   <div className="backlinks-header" style={{ marginTop: backlinksFiles.length > 0 ? 12 : 0, color: 'var(--tx-3)' }}>Unlinked Mentions</div>
-                  {unlinkedMentions.map(f => (
-                    <div key={f.path} className="backlink-item unlinked" onClick={() => storeActionsRef.current.openFile(f.path)}>
-                      <FileText size={14} style={{ opacity: 0.5 }} /> <span style={{ opacity: 0.7 }}>{f.name.replace(/\.md$/, '')}</span>
+                  {unlinkedMentions.map(hit => (
+                    <div key={hit.file.path} className="backlink-item unlinked">
+                      <div className="backlink-item-main" onClick={() => storeActionsRef.current.openFile(hit.file.path)}>
+                        <FileText size={14} style={{ opacity: 0.5 }} />
+                        <span className="backlink-item-name">
+                          {hit.file.name.replace(/\.md$/, '')}
+                          {hit.count > 1 && <span className="backlink-count">×{hit.count}</span>}
+                        </span>
+                        <span className="backlink-snippet">{hit.snippet}</span>
+                      </div>
+                      <button
+                        className="backlink-link-btn"
+                        title={`Turn ${hit.count > 1 ? 'these mentions' : 'this mention'} into a [[wikilink]]`}
+                        onClick={(e) => { e.stopPropagation(); linkMention(hit); }}
+                      >
+                        <LinkIcon size={11} /> Link
+                      </button>
                     </div>
                   ))}
                 </>
@@ -1715,13 +2043,23 @@ useEffect(() => {
         </div>
       </div>
 
+      {showHistory && currentTab && (
+        <HistoryModal notePath={currentTab} onClose={() => setShowHistory(false)} />
+      )}
+
       {showLinkModal && (
         <LinkModal
           existing={existingLink}
           onConfirm={(url, text) => {
             if (!editor) return;
             if (editor.state.selection.empty && text) {
-              editor.chain().focus().insertContent(`<a href="${url}">${text}</a>`).run();
+              // Insert as a text node with a link mark — interpolating
+              // into an HTML string lets crafted text/URLs inject markup.
+              editor.chain().focus().insertContent({
+                type: 'text',
+                text,
+                marks: [{ type: 'link', attrs: { href: url } }],
+              }).run();
             } else {
               editor.chain().focus().setLink({ href: url }).run();
             }

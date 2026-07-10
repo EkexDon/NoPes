@@ -65,10 +65,13 @@ async function buildContext(
       loadedNotes.push({ name: name + tagStr, path: activeTab, text, isActive: true });
       seenPaths.add(activeTab);
 
-      // 2. Identify Backlinks (notes that link TO this one)
+      // 2. Identify Backlinks (notes that link TO this one).
+      // force-graph mutates link.source/target from id strings into
+      // node objects once GraphView has rendered — handle both.
+      const endpointId = (e: any): string => (typeof e === 'object' && e !== null ? e.id : e);
       const backlinks = graphData.links
-        .filter(l => l.target === activeTab)
-        .map(l => l.source);
+        .filter(l => endpointId(l.target) === activeTab)
+        .map(l => endpointId(l.source));
       
       for (const blPath of backlinks) {
         if (!seenPaths.has(blPath)) {
@@ -221,24 +224,33 @@ ${contextStr}`
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let accumulated = '';
+      // NDJSON lines can be split across network chunks — buffer the
+      // trailing partial line instead of dropping its tokens.
+      let lineBuffer = '';
+
+      const applyLine = (line: string) => {
+        if (!line.trim()) return;
+        try {
+          const json = JSON.parse(line);
+          const token = json.message?.content ?? '';
+          accumulated += token;
+          setMessages(prev => {
+            const copy = [...prev];
+            copy[copy.length - 1] = { role: 'assistant', content: accumulated };
+            return copy;
+          });
+        } catch { /* skip malformed line */ }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        for (const line of chunk.split('\n').filter(Boolean)) {
-          try {
-            const json = JSON.parse(line);
-            const token = json.message?.content ?? '';
-            accumulated += token;
-            setMessages(prev => {
-              const copy = [...prev];
-              copy[copy.length - 1] = { role: 'assistant', content: accumulated };
-              return copy;
-            });
-          } catch { /* skip */ }
-        }
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() ?? '';
+        lines.forEach(applyLine);
       }
+      applyLine(lineBuffer);
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         setMessages(prev => [...prev, {

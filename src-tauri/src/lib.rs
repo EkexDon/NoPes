@@ -5,8 +5,26 @@ use std::panic;
 use std::fs::OpenOptions;
 use std::io::Write;
 use tauri::Manager;
+use tauri::Emitter;
+use std::sync::Arc;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+
+/// Show/hide the Quick Capture window (⌥Space, tray menu).
+fn toggle_capture_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("capture") {
+        if win.is_visible().unwrap_or(false) {
+            let _ = win.hide();
+        } else {
+            let _ = win.center();
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+    }
+}
 
 struct OllamaProcess(Mutex<Option<Child>>);
+struct ClipperServer(Mutex<Option<Arc<tiny_http::Server>>>);
 
 fn get_ollama_path() -> String {
     // 1. Check for bundled binary (highest priority for distribution)
@@ -95,17 +113,78 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .manage(OllamaProcess(Mutex::new(None)))
-        .setup(move |_app| {
-            // Initial startup logic is handled by the frontend calling manage_ollama(true)
-            // if AI is enabled in the user's settings.
+        .manage(ClipperServer(Mutex::new(None)))
+        .setup(move |app| {
+            // Initial Ollama startup is handled by the frontend calling
+            // manage_ollama(true) if AI is enabled in the user's settings.
+
+            // ── Tray icon (Quick Capture entry point) ─────────────
+            let open_item = MenuItem::with_id(app, "open", "Open NoPes", true, None::<&str>)?;
+            let capture_item = MenuItem::with_id(app, "capture", "Quick Capture", true, Some("Alt+Space"))?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit NoPes", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open_item, &capture_item, &quit_item])?;
+
+            if let Some(icon) = app.default_window_icon().cloned() {
+                TrayIconBuilder::with_id("nopes-tray")
+                    .icon(icon)
+                    .tooltip("NoPes")
+                    .menu(&menu)
+                    .show_menu_on_left_click(true)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "open" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "capture" => toggle_capture_window(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .build(app)?;
+            }
+
+            // ── Global shortcut: ⌥Space toggles Quick Capture ─────
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+                let alt_space = Shortcut::new(Some(Modifiers::ALT), Code::Space);
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_handler(move |app_handle, shortcut, event| {
+                            if event.state() == ShortcutState::Pressed && shortcut == &alt_space {
+                                toggle_capture_window(app_handle);
+                            }
+                        })
+                        .build(),
+                )?;
+                if let Err(e) = app.global_shortcut().register(alt_space) {
+                    // Non-fatal: another app may own ⌥Space; tray entry still works.
+                    eprintln!("[Nopes] Could not register ⌥Space global shortcut: {}", e);
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Only the MAIN window's lifecycle controls the app — the capture
+            // window hides/shows constantly and must not kill Ollama.
+            if window.label() != "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    // Closing the capture window just hides it.
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                return;
+            }
             match event {
                 tauri::WindowEvent::Destroyed => {
-                    // Kill ollama serve when the main window is destroyed
                     stop_ollama_service(window.app_handle());
+                    // The hidden capture window would keep the process alive
+                    // forever — main window closing means quit.
+                    window.app_handle().exit(0);
                 }
                 tauri::WindowEvent::CloseRequested { .. } => {
                     // Also clean up Ollama on close request (catches cases where
@@ -115,7 +194,7 @@ pub fn run() {
                 _ => {}
             }
         })
-        .invoke_handler(tauri::generate_handler![ensure_model, manage_ollama, get_system_stats])
+        .invoke_handler(tauri::generate_handler![ensure_model, manage_ollama, get_system_stats, check_whisper, transcribe_audio, set_clipper])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -278,6 +357,169 @@ async fn ensure_model() -> Result<String, String> {
             Err("Failed to pull llama3.2:1b".to_string())
         }
     }
+}
+
+/* ── Web Clipper: loopback-only, token-gated HTTP intake ──────
+   The "server" never leaves the machine: bound to 127.0.0.1, OFF by
+   default, and every request must carry the token the app generated.
+   Clips are emitted to the frontend, which writes the note with its
+   normal (permission-scoped) filesystem access. */
+
+pub const CLIPPER_PORT: u16 = 21787;
+const CLIPPER_MAX_BODY: usize = 2 * 1024 * 1024;
+
+fn clip_response(status: u16, body: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+    let mut resp = tiny_http::Response::from_string(body).with_status_code(status);
+    for (k, v) in [
+        ("Access-Control-Allow-Origin", "*"),
+        ("Access-Control-Allow-Headers", "content-type, x-nopes-token"),
+        ("Access-Control-Allow-Methods", "POST, OPTIONS"),
+        ("Content-Type", "application/json"),
+    ] {
+        if let Ok(h) = tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()) {
+            resp.add_header(h);
+        }
+    }
+    resp
+}
+
+#[tauri::command]
+fn set_clipper(enabled: bool, token: String, app: tauri::AppHandle) -> Result<u16, String> {
+    let state = app.state::<ClipperServer>();
+    if let Some(server) = state.0.lock().map_err(|e| e.to_string())?.take() {
+        server.unblock(); // stops the accept loop; thread exits
+    }
+    if !enabled {
+        return Ok(0);
+    }
+    if token.len() < 16 {
+        return Err("Clipper token too short".into());
+    }
+
+    let server = Arc::new(
+        tiny_http::Server::http(("127.0.0.1", CLIPPER_PORT))
+            .map_err(|e| format!("Could not bind 127.0.0.1:{}: {}", CLIPPER_PORT, e))?,
+    );
+    *state.0.lock().map_err(|e| e.to_string())? = Some(server.clone());
+
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        for mut request in server.incoming_requests() {
+            let method = request.method().clone();
+            if method == tiny_http::Method::Options {
+                let _ = request.respond(clip_response(204, ""));
+                continue;
+            }
+            let token_ok = request.headers().iter().any(|h| {
+                h.field.as_str().as_str().eq_ignore_ascii_case("x-nopes-token")
+                    && h.value.as_str() == token
+            });
+            if method != tiny_http::Method::Post || request.url() != "/clip" || !token_ok {
+                let _ = request.respond(clip_response(403, "{\"error\":\"forbidden\"}"));
+                continue;
+            }
+            let mut body = String::new();
+            use std::io::Read;
+            let mut limited = request.as_reader().take(CLIPPER_MAX_BODY as u64);
+            if limited.read_to_string(&mut body).is_err() {
+                let _ = request.respond(clip_response(400, "{\"error\":\"bad body\"}"));
+                continue;
+            }
+            match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(payload) => {
+                    let _ = app_handle.emit("nopes:clip", payload);
+                    let _ = request.respond(clip_response(200, "{\"ok\":true}"));
+                }
+                Err(_) => {
+                    let _ = request.respond(clip_response(400, "{\"error\":\"invalid json\"}"));
+                }
+            }
+        }
+        println!("[Nopes] Clipper server stopped.");
+    });
+
+    Ok(CLIPPER_PORT)
+}
+
+/* ── Voice memos: local Whisper transcription ─────────────────
+   Same discovery philosophy as Ollama: find a user-installed binary,
+   never bundle. Model lives in the app data dir, downloaded on demand
+   by the frontend. */
+
+fn find_whisper_binary() -> Option<String> {
+    let candidates = [
+        "whisper-cli",
+        "whisper-cpp",
+        "/opt/homebrew/bin/whisper-cli",
+        "/opt/homebrew/bin/whisper-cpp",
+        "/usr/local/bin/whisper-cli",
+        "/usr/local/bin/whisper-cpp",
+    ];
+    for c in candidates {
+        if Command::new(c)
+            .arg("--help")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some(c.to_string());
+        }
+    }
+    None
+}
+
+fn whisper_model_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("models");
+    Ok(dir.join("ggml-base.bin"))
+}
+
+#[tauri::command]
+async fn check_whisper(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let model = whisper_model_path(&app)?;
+    Ok(serde_json::json!({
+        "binary": find_whisper_binary(),
+        "model_present": model.exists(),
+        "model_path": model.to_string_lossy(),
+    }))
+}
+
+#[tauri::command]
+async fn transcribe_audio(wav_path: String, app: tauri::AppHandle) -> Result<String, String> {
+    let binary = find_whisper_binary()
+        .ok_or("Whisper not found. Install it with: brew install whisper-cpp")?;
+    let model = whisper_model_path(&app)?;
+    if !model.exists() {
+        return Err("Whisper model not downloaded yet — see Settings → General → Voice.".into());
+    }
+
+    // whisper.cpp is CPU/GPU heavy — keep it off the async runtime threads.
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        Command::new(&binary)
+            .args([
+                "-m", &model.to_string_lossy(),
+                "-f", &wav_path,
+                "-l", "auto",   // auto-detect language (German + English users!)
+                "-np",           // no progress prints
+                "-nt",           // no timestamps
+            ])
+            .output()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("Could not run whisper: {}", e))?;
+
+    if !out.status.success() {
+        return Err(format!(
+            "Whisper failed: {}",
+            String::from_utf8_lossy(&out.stderr).chars().take(300).collect::<String>()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 #[cfg(test)]

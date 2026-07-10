@@ -14,45 +14,45 @@ interface KanbanColumn {
   cards: KanbanCard[];
 }
 
-function parseKanban(markdown: string): KanbanColumn[] {
+// Matches: "- [ ] text", "* [ ] text", "[ ] text", and checked variants.
+// Lenient on purpose: empty brackets "[]", missing space after "]", and
+// TipTap-escaped brackets "\[ \]" (the markdown serializer escapes plain-
+// text brackets) must all still count as cards.
+const checkboxRe = /^(?:[-*+]\s+)?\\?\[( |x)?\\?\]\s*(.+)$/i;
+// Heading: ## Title OR a line starting with emoji followed by space and
+// text (e.g. "📋 To Do") — TipTap strips the ## from emoji headings.
+const emojiHeadingRe = /^([\p{Emoji_Presentation}\p{Extended_Pictographic}](?:‍[\p{Emoji_Presentation}\p{Extended_Pictographic}])*️?)\s+(.+)$/u;
+const mdHeadingRe = /^#{2,6}\s+(.+)$/;
+
+/* Column-heading detection shared by parse and rebuild — must stay in
+   sync or rebuild writes cards into the wrong section. */
+function headingTitleOf(trimmed: string): string | null {
+  if (!trimmed || trimmed.startsWith('<!--') || trimmed.startsWith('# ')) return null;
+  const md = trimmed.match(mdHeadingRe);
+  if (md) return md[1].trim();
+  if (!checkboxRe.test(trimmed)) {
+    const em = trimmed.match(emojiHeadingRe);
+    if (em) return `${em[1]} ${em[2].trim()}`;
+  }
+  return null;
+}
+
+export function parseKanban(markdown: string): KanbanColumn[] {
   const lines = markdown.split('\n');
   const columns: KanbanColumn[] = [];
   let currentCol: KanbanColumn | null = null;
-
-  // Matches: "- [ ] text", "* [ ] text", "[ ] text", and checked variants
-  const checkboxRe = /^(?:[-*]\s+)?\[( |x)\]\s+(.+)$/i;
-
-  // Heading: ## Title OR a line starting with emoji followed by space and text (e.g. "📋 To Do")
-  // Emoji range covers most common emojis
-  const emojiHeadingRe = /^([\p{Emoji_Presentation}\p{Extended_Pictographic}](?:\u200d[\p{Emoji_Presentation}\p{Extended_Pictographic}])*\uFE0F?)\s+(.+)$/u;
-  const mdHeadingRe = /^#{1,6}\s+(.+)$/;
+  let cardSeq = 0; // globally unique card ids — duplicate ids break toggle/drag
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-
-    // Skip H1 title and HTML comments
     if (trimmed.startsWith('<!--') || trimmed.startsWith('# ')) continue;
 
-    // Try markdown heading first (## Title)
-    let headingTitle: string | null = null;
-    const mdMatch = trimmed.match(mdHeadingRe);
-    if (mdMatch) {
-      headingTitle = mdMatch[1].trim();
-    } else {
-      // Try emoji heading (📋 To Do, ✅ Done, etc.) — only if NOT a checkbox
-      const cbCheck = trimmed.match(checkboxRe);
-      if (!cbCheck) {
-        const emojiMatch = trimmed.match(emojiHeadingRe);
-        if (emojiMatch) {
-          headingTitle = `${emojiMatch[1]} ${emojiMatch[2].trim()}`;
-        }
-      }
-    }
-
-    if (headingTitle) {
+    const headingTitle = headingTitleOf(trimmed);
+    if (headingTitle !== null) {
       currentCol = {
-        id: `col-${headingTitle}`,
+        // index-prefixed so duplicate column titles still get unique ids
+        id: `col-${columns.length}-${headingTitle}`,
         title: headingTitle,
         cards: [],
       };
@@ -68,9 +68,9 @@ function parseKanban(markdown: string): KanbanColumn[] {
         columns.unshift(currentCol); // put at front
       }
       currentCol.cards.push({
-        id: `card-${currentCol.id}-${currentCol.cards.length}`,
+        id: `card-${cardSeq++}`,
         text: cbMatch[2].trim(),
-        checked: cbMatch[1].toLowerCase() === 'x',
+        checked: (cbMatch[1] ?? '').toLowerCase() === 'x',
       });
     }
   }
@@ -78,47 +78,67 @@ function parseKanban(markdown: string): KanbanColumn[] {
   return columns;
 }
 
-function fullRebuildMarkdown(original: string, columns: KanbanColumn[]): string {
-  // Strategy: Keep header (everything before first column heading) + rebuild kanban section
+/* Line-preserving rebuild: every non-checkbox line (prose, bullets,
+   tables, code) stays exactly where it was. Only the checkbox lines of
+   each column section are replaced — at the position of that section's
+   first checkbox line, or right after the heading if it had none. */
+export function fullRebuildMarkdown(original: string, columns: KanbanColumn[]): string {
   const lines = original.split('\n');
-  const checkboxRe = /^(?:[-*]\s+)?\[( |x)\]\s+(.+)$/i;
-  const emojiHeadingRe = /^([\p{Emoji_Presentation}\p{Extended_Pictographic}](?:\u200d[\p{Emoji_Presentation}\p{Extended_Pictographic}])*\uFE0F?)\s+(.+)$/u;
-  const mdHeadingRe = /^#{2,6}\s+(.+)$/;
 
-  // Find the line index where the first column heading starts
-  let firstHeadingIdx = -1;
+  // Split into sections: preamble (before first heading) + one per heading
+  type Section = { title: string | null; start: number; end: number };
+  const sections: Section[] = [];
+  let cur: Section = { title: null, start: 0, end: lines.length };
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith('<!--') || trimmed.startsWith('# ')) continue;
-
-    if (mdHeadingRe.test(trimmed)) {
-      firstHeadingIdx = i;
-      break;
-    }
-    // Emoji heading - but only if NOT a checkbox
-    if (!checkboxRe.test(trimmed) && emojiHeadingRe.test(trimmed)) {
-      firstHeadingIdx = i;
-      break;
+    const t = headingTitleOf(lines[i].trim());
+    if (t !== null) {
+      cur.end = i;
+      sections.push(cur);
+      cur = { title: t, start: i, end: lines.length };
     }
   }
+  sections.push(cur);
 
-  // Header part: everything before first column
-  const header = firstHeadingIdx >= 0
-    ? lines.slice(0, firstHeadingIdx).join('\n').replace(/\n+$/, '')
-    : lines.join('\n').replace(/\n+$/, '');
+  // Map columns to sections by order: 'col-default' ↔ preamble,
+  // the rest ↔ heading sections in document order.
+  const headingSections = sections.filter(s => s.title !== null);
+  const defaultCol = columns.find(c => c.id === 'col-default') ?? null;
+  const headingCols = columns.filter(c => c.id !== 'col-default');
 
-  // Build kanban section from columns
-  const kanbanLines: string[] = [];
-  for (const col of columns) {
-    kanbanLines.push('');
-    kanbanLines.push(`## ${col.title}`);
-    for (const card of col.cards) {
-      kanbanLines.push(`- [${card.checked ? 'x' : ' '}] ${card.text}`);
+  const renderSection = (section: Section, col: KanbanColumn | null): string[] => {
+    const body = lines.slice(section.start, section.end);
+    if (!col) return body;
+    const cardLines = col.cards.map(c => `- [${c.checked ? 'x' : ' '}] ${c.text}`);
+    const out: string[] = [];
+    let inserted = false;
+    for (let i = 0; i < body.length; i++) {
+      if (checkboxRe.test(body[i].trim())) {
+        if (!inserted) { out.push(...cardLines); inserted = true; }
+        continue; // drop old checkbox line
+      }
+      out.push(body[i]);
     }
+    if (!inserted && cardLines.length > 0) {
+      // No checkbox lines existed — insert after the heading (heading
+      // sections) or at the end (preamble).
+      const at = section.title !== null ? 1 : out.length;
+      out.splice(at, 0, '', ...cardLines);
+    }
+    return out;
+  };
+
+  const result: string[] = [];
+  result.push(...renderSection(sections[0], defaultCol));
+  headingSections.forEach((section, i) => {
+    result.push(...renderSection(section, headingCols[i] ?? null));
+  });
+  // Columns with no matching section (shouldn't happen, but never drop data)
+  for (let i = headingSections.length; i < headingCols.length; i++) {
+    const col = headingCols[i];
+    result.push('', `## ${col.title}`, ...col.cards.map(c => `- [${c.checked ? 'x' : ' '}] ${c.text}`));
   }
 
-  return (header + '\n' + kanbanLines.join('\n') + '\n').replace(/\n{3,}/g, '\n\n');
+  return result.join('\n').replace(/\n{3,}/g, '\n\n');
 }
 
 export const KanbanView: React.FC = () => {
@@ -136,28 +156,33 @@ export const KanbanView: React.FC = () => {
       // Different file — always re-parse fresh
       prevTabRef.current = activeTab ?? null;
       lastSavedMdRef.current = content;
-      const parsed = parseKanban(content);
-      setLocalColumns(parsed);
+      setLocalColumns(parseKanban(content));
+    } else if (content !== lastSavedMdRef.current) {
+      // Same file but the content changed under us (editor pane, split
+      // view, external save) — re-sync the board. Our own persists set
+      // lastSavedMdRef first, so they don't loop through here.
+      lastSavedMdRef.current = content;
+      setLocalColumns(parseKanban(content));
     }
-  }, [activeTab]); // Only re-parse when switching tabs, NOT when content changes
+  }, [activeTab, content]);
 
   const [dragging, setDragging] = useState<{ colId: string; cardId: string } | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const [activeInsertCol, setActiveInsertCol] = useState<string | null>(null);
   const [newCardText, setNewCardText] = useState('');
 
-  const { setTabContents } = useStore.getState();
-
   const persist = useCallback(
     (cols: KanbanColumn[]) => {
       if (!activeTab) return;
       const newMd = fullRebuildMarkdown(content, cols);
       lastSavedMdRef.current = newMd; // mark as our own write so sync doesn't re-parse
-      // Update both disk and memory
+      // Update memory immediately (functional set — a spread of a stale
+      // snapshot here used to clobber concurrent edits to other tabs),
+      // then persist to disk.
+      useStore.setState(state => ({ tabContents: { ...state.tabContents, [activeTab]: newMd } }));
       saveFile(activeTab, newMd);
-      setTabContents({ ...tabContents, [activeTab]: newMd });
     },
-    [activeTab, content, saveFile, tabContents, setTabContents]
+    [activeTab, content, saveFile]
   );
 
   const handleDrop = (targetColId: string) => {
@@ -170,10 +195,10 @@ export const KanbanView: React.FC = () => {
     const newCols = localColumns.map((col) => ({ ...col, cards: [...col.cards] }));
     const srcCol = newCols.find((c) => c.id === dragging.colId);
     const dstCol = newCols.find((c) => c.id === targetColId);
-    if (!srcCol || !dstCol) return;
+    if (!srcCol || !dstCol) { setDragging(null); setDragOverCol(null); return; }
 
     const cardIdx = srcCol.cards.findIndex((c) => c.id === dragging.cardId);
-    if (cardIdx === -1) return;
+    if (cardIdx === -1) { setDragging(null); setDragOverCol(null); return; }
 
     const [card] = srcCol.cards.splice(cardIdx, 1);
     dstCol.cards.push(card);

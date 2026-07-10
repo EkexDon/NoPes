@@ -18,16 +18,30 @@ import {
   ExternalLink,
   FolderOpen,
   Trash2,
-  Edit3,
   Copy,
   Heart,
   Palette,
-  LayoutGrid,
-  Columns
+  LayoutGrid
+} from 'lucide-react';
+import {
+  BookOpen, Lightbulb, Target, Bookmark, Flag, Tag, Calendar,
+  BarChart, PieChart, TrendingUp, Activity, Zap,
+  Code, Terminal, Database, Server, Cloud,
+  Home, Settings, User, Users, Mail, MessageSquare,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { ContextMenu } from './ContextMenu';
 import { useContextMenu } from '../hooks/useContextMenu';
+
+// Explicit map — `require('lucide-react')` doesn't exist in the Vite
+// browser build and crashed the picker's Icons tab.
+const LUCIDE_ICON_MAP: Record<string, React.ComponentType<{ size?: number }>> = {
+  FileText, BookOpen, Lightbulb, Target, Star, Heart,
+  Folder, Bookmark, Flag, Tag, Clock, Calendar,
+  BarChart, PieChart, TrendingUp, Activity, Zap,
+  Code, Terminal, Database, Server, Cloud,
+  Home, Settings, User, Users, Mail, MessageSquare,
+};
 
 // Icon picker component for selecting emoji/icons
 const IconPicker: React.FC<{
@@ -102,7 +116,7 @@ const IconPicker: React.FC<{
           ) : (
             <div className="lucide-grid">
               {lucideIcons.map(iconName => {
-                const Icon = require('lucide-react')[iconName];
+                const Icon = LUCIDE_ICON_MAP[iconName];
                 return (
                   <button
                     key={iconName}
@@ -176,8 +190,8 @@ const HomeCard: React.FC<{
   const getColor = () => {
     if (metadata?.color) return metadata.color;
     if (item.is_dir) return 'var(--accent)';
-    if (metadata?.itemType === 'canvas') return '#a78bfa';
-    if (metadata?.itemType === 'kanban') return '#34d399';
+    if (metadata?.itemType === 'canvas') return 'var(--accent-light)';
+    if (metadata?.itemType === 'kanban') return 'var(--green)';
     return 'var(--accent-light)';
   };
   
@@ -193,7 +207,7 @@ const HomeCard: React.FC<{
       >
         <div 
           className="home-card-icon-wrapper"
-          style={{ backgroundColor: `${getColor()}15` }}
+          style={{ backgroundColor: `color-mix(in srgb, ${getColor()} 9%, transparent)` }}
           onClick={e => {
             e.stopPropagation();
             setShowIconPicker(true);
@@ -304,7 +318,6 @@ export const HomeView: React.FC = () => {
     createCanvasFile,
     createKanbanFile,
     toggleFavorite,
-    renameItem,
     deleteItem,
     revealInFinder,
     copyToClipboard,
@@ -316,8 +329,6 @@ export const HomeView: React.FC = () => {
   const [filter, setFilter] = useState<'all' | 'notes' | 'canvas' | 'kanban' | 'folders'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewMenu, setShowNewMenu] = useState(false);
-  const [renamingItem, setRenamingItem] = useState<string | null>(null);
-  const [newName, setNewName] = useState('');
   const [itemToDelete, setItemToDelete] = useState<{ path: string; name: string } | null>(null);
   
   // Get all items (files and folders)

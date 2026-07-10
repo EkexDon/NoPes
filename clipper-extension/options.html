@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>NoPes Web Clipper — Setup</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 20px; color: #1a1917; }
+    h1 { font-size: 18px; }
+    p { font-size: 13px; line-height: 1.5; color: #555; }
+    input { width: 100%; padding: 8px 10px; font-family: monospace; font-size: 13px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+    button { margin-top: 10px; padding: 8px 18px; border: none; border-radius: 6px; background: #7c6dff; color: #fff; font-weight: 600; cursor: pointer; }
+    #status { font-size: 12px; margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <h1>NoPes Web Clipper</h1>
+  <p>
+    1. In NoPes: <strong>Settings → General → Web Clipper</strong> → enable it.<br>
+    2. Click the token to copy it, paste it here.<br>
+    Clips go to <code>127.0.0.1:21787</code> — your machine only, never the internet.
+  </p>
+  <input id="token" placeholder="Paste your NoPes clipper token" autocomplete="off">
+  <div>
+    <button id="save">Save</button>
+    <span id="status"></span>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>

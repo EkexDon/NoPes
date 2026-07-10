@@ -2,6 +2,7 @@ import { Palette } from "lucide-react";
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import '@excalidraw/excalidraw/index.css';
 import { useStore } from '../store/useStore';
+import { isDarkTheme, cssToken } from '../themes';
 import { readTextFile, writeFile, exists, mkdir } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
 import { X, RefreshCw } from 'lucide-react';
@@ -9,25 +10,37 @@ import { X, RefreshCw } from 'lucide-react';
 const ExcalidrawComp = React.lazy(() => import('@excalidraw/excalidraw').then(mod => ({ default: mod.Excalidraw })));
 
 export const CanvasView: React.FC = () => {
-  const { activeTab, vaultPath, setViewMode, allFiles, openFile } = useStore();
+  const { activeTab, vaultPath, setViewMode, allFiles, openFile, theme } = useStore();
+  const excalidrawTheme = isDarkTheme(theme) ? 'dark' : 'light';
   const [initialData, setInitialData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const excalidrawRef = useRef<any>(null);
 
-  // Derive canvas file path from active note
+  // Derive canvas file path from active note. Keyed by the note's
+  // vault-relative path (slashes → '__') so same-named notes in
+  // different folders don't share one canvas file.
   const getCanvasPath = async () => {
     if (!activeTab || !vaultPath) return null;
     const canvasDir = await join(vaultPath, 'canvas');
     if (!(await exists(canvasDir))) {
       await mkdir(canvasDir);
     }
-    const noteName = activeTab.split('/').pop()?.replace('.md', '') || 'Untitled';
-    return await join(canvasDir, `${noteName}.excalidraw`);
+    const rel = activeTab.replace(vaultPath, '').replace(/^[/\\]/, '');
+    const key = rel.replace(/\.md$/, '').replace(/[/\\]/g, '__') || 'Untitled';
+    const scopedPath = await join(canvasDir, `${key}.excalidraw`);
+    // Migration: fall back to the old basename-keyed file if it exists
+    if (!(await exists(scopedPath))) {
+      const legacyName = activeTab.split(/[/\\]/).pop()?.replace(/\.md$/, '') || 'Untitled';
+      const legacyPath = await join(canvasDir, `${legacyName}.excalidraw`);
+      if (legacyName !== key && (await exists(legacyPath))) return legacyPath;
+    }
+    return scopedPath;
   };
 
   useEffect(() => {
     let active = true;
+    hasDrawnRef.current = false;
     const loadData = async () => {
       setLoading(true);
       const path = await getCanvasPath();
@@ -55,17 +68,24 @@ export const CanvasView: React.FC = () => {
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  const hasDrawnRef = useRef(false);
+
   const handleSave = (elements: readonly any[], appState: any, files: any) => {
-    if (!elements || elements.length === 0) return;
-    
+    // Skip the initial empty onChange, but once the user has drawn
+    // something, persist empty states too — deleting every shape
+    // must survive a reopen.
+    if (!elements) return;
+    if (elements.length === 0 && !hasDrawnRef.current) return;
+    hasDrawnRef.current = true;
+
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    
+
     saveTimeoutRef.current = setTimeout(async () => {
       setSaving(true);
       try {
         const path = await getCanvasPath();
         if (!path) return;
-        const payload = JSON.stringify({ elements, appState: { theme: 'dark', viewBackgroundColor: appState.viewBackgroundColor }, files });
+        const payload = JSON.stringify({ elements, appState: { theme: excalidrawTheme, viewBackgroundColor: appState.viewBackgroundColor }, files });
         await writeFile(path, new TextEncoder().encode(payload));
       } catch (err) {
         console.error('Failed to save canvas:', err);
@@ -99,7 +119,7 @@ export const CanvasView: React.FC = () => {
         <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}>
           {loading ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-tertiary)' }}>
-              <RefreshCw className="spin" size={24} />
+              <RefreshCw className="spinning" size={24} />
             </div>
           ) : (
             <Suspense fallback={
@@ -109,8 +129,8 @@ export const CanvasView: React.FC = () => {
             }>
               <ExcalidrawComp
                 excalidrawAPI={(api) => { excalidrawRef.current = api; }}
-                theme="dark"
-                initialData={initialData || { appState: { theme: 'dark', viewBackgroundColor: '#0a0a0a' } }}
+                theme={excalidrawTheme}
+                initialData={initialData || { appState: { theme: excalidrawTheme, viewBackgroundColor: cssToken('--bg-0') || '#0a0a0a' } }}
                 onChange={handleSave}
                 onLinkOpen={(element, event) => {
                   let link = element.link || '';
