@@ -1,25 +1,283 @@
+/* =====================================================
+   NOPES — Theme Tokens
+   Single source of truth for all color tokens.
+   Structure/layout tokens live in index.css.
+
+   Default theme (Obsidian) is defined on :root so existing
+   users see no change. Other themes override via
+   [data-theme="…"] on <html>, applied by the store.
+   ===================================================== */
+
 :root {
-  /* Core Colors */
-  --nopes-bg: #0d0d0d;
-  --nopes-sidebar-bg: rgba(18, 18, 18, 0.8);
-  --nopes-accent: #7b4dff;
-  --nopes-accent-soft: rgba(123, 77, 255, 0.15);
-  
-  /* Text */
-  --nopes-text-main: #e0e0e0;
-  --nopes-text-muted: #999;
-  
-  /* Borders & Glass */
-  --nopes-border: rgba(255, 255, 255, 0.08);
-  --nopes-blur: blur(12px);
-  
-  /* Editor specific */
-  --nopes-editor-max-width: 800px;
-  --nopes-font-size: 16px;
-  --nopes-line-height: 1.6;
+  color-scheme: dark;
+
+  /* Surfaces (darkest → lightest) */
+  --bg-0: #161616;
+  --bg-1: #1e1e1e;
+  --bg-2: #252525;
+  --bg-3: #2d2d2d;
+  --bg-4: #363636;
+
+  /* Text (strong → faint) */
+  --tx-1: #e8e8e8;
+  --tx-2: #a8a8a8;
+  --tx-3: #686868;
+
+  /* Accent */
+  --accent: #7c6dff;
+  --accent-rgb: 124, 109, 255;
+  --accent-light: #a78bfa;
+  --accent-dim: rgba(var(--accent-rgb), 0.12);
+  --accent-faint: rgba(var(--accent-rgb), 0.05);
+  --accent-glow: rgba(var(--accent-rgb), 0.25);
+  --accent-contrast: #ffffff;
+
+  /* Semantic */
+  --red: #f87171;
+  --red-rgb: 248, 113, 113;
+  --green: #34d399;
+  --green-rgb: 52, 211, 153;
+  --amber: #fbbf24;
+  --amber-rgb: 251, 191, 36;
+  --gold: #f0a500;
+
+  /* Borders */
+  --border: #2a2a2a;
+  --border-light: #333333;
+
+  /* Interaction tints */
+  --hover-1: rgba(255, 255, 255, 0.05);
+  --hover-2: rgba(255, 255, 255, 0.1);
+  --inset: rgba(0, 0, 0, 0.25);
+
+  /* Overlays & glass */
+  --overlay: rgba(0, 0, 0, 0.65);
+  --overlay-strong: rgba(0, 0, 0, 0.75);
+  --glass: rgba(22, 22, 22, 0.7);
+
+  /* Elevation */
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.6);
+  --shadow-xl: 0 32px 90px rgba(0, 0, 0, 0.8);
 }
 
-/* 
-  Chef's Tip: You can override these variables in your own 
-  custom CSS file to completely change the look of Nopes.
-*/
+/* ── Midnight — deep blue dark ─────────────────────── */
+[data-theme="midnight"] {
+  color-scheme: dark;
+
+  --bg-0: #0d1420;
+  --bg-1: #121b2a;
+  --bg-2: #182335;
+  --bg-3: #1f2c42;
+  --bg-4: #283750;
+
+  --tx-1: #dde6f2;
+  --tx-2: #9db0c7;
+  --tx-3: #5c6f88;
+
+  --accent: #4d9fff;
+  --accent-rgb: 77, 159, 255;
+  --accent-light: #7db8ff;
+  --accent-contrast: #ffffff;
+
+  --red: #ff7b72;
+  --red-rgb: 255, 123, 114;
+  --green: #3fb950;
+  --green-rgb: 63, 185, 80;
+  --amber: #d29922;
+  --amber-rgb: 210, 153, 34;
+  --gold: #e8b341;
+
+  --border: #1d2a3d;
+  --border-light: #294059;
+
+  --hover-1: rgba(160, 200, 255, 0.06);
+  --hover-2: rgba(160, 200, 255, 0.12);
+  --inset: rgba(0, 0, 0, 0.3);
+
+  --overlay: rgba(2, 6, 14, 0.65);
+  --overlay-strong: rgba(2, 6, 14, 0.78);
+  --glass: rgba(13, 20, 32, 0.72);
+
+  --shadow-sm: 0 4px 12px rgba(0, 4, 12, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 4, 12, 0.55);
+  --shadow-lg: 0 16px 48px rgba(0, 4, 12, 0.65);
+  --shadow-xl: 0 32px 90px rgba(0, 4, 12, 0.85);
+}
+
+/* ── Forest — sage green dark ──────────────────────── */
+[data-theme="forest"] {
+  color-scheme: dark;
+
+  --bg-0: #121712;
+  --bg-1: #171e17;
+  --bg-2: #1d261d;
+  --bg-3: #243024;
+  --bg-4: #2d3c2d;
+
+  --tx-1: #e3e8dd;
+  --tx-2: #a4b09b;
+  --tx-3: #667360;
+
+  --accent: #93b878;
+  --accent-rgb: 147, 184, 120;
+  --accent-light: #aecf96;
+  --accent-contrast: #10160e;
+
+  --red: #e5786d;
+  --red-rgb: 229, 120, 109;
+  --green: #6fcf8e;
+  --green-rgb: 111, 207, 142;
+  --amber: #d9a63f;
+  --amber-rgb: 217, 166, 63;
+  --gold: #cfa63f;
+
+  --border: #232d22;
+  --border-light: #2e3b2c;
+
+  --hover-1: rgba(200, 230, 180, 0.05);
+  --hover-2: rgba(200, 230, 180, 0.1);
+  --inset: rgba(0, 0, 0, 0.28);
+
+  --overlay: rgba(6, 10, 6, 0.65);
+  --overlay-strong: rgba(6, 10, 6, 0.78);
+  --glass: rgba(18, 23, 18, 0.72);
+
+  --shadow-sm: 0 4px 12px rgba(2, 6, 2, 0.38);
+  --shadow-md: 0 8px 24px rgba(2, 6, 2, 0.52);
+  --shadow-lg: 0 16px 48px rgba(2, 6, 2, 0.62);
+  --shadow-xl: 0 32px 90px rgba(2, 6, 2, 0.82);
+}
+
+/* ── Rosewood — warm terracotta dark ───────────────── */
+[data-theme="rosewood"] {
+  color-scheme: dark;
+
+  --bg-0: #191210;
+  --bg-1: #201714;
+  --bg-2: #281d19;
+  --bg-3: #322520;
+  --bg-4: #3e2e27;
+
+  --tx-1: #eee2da;
+  --tx-2: #b8a396;
+  --tx-3: #7a685e;
+
+  --accent: #e07856;
+  --accent-rgb: 224, 120, 86;
+  --accent-light: #eb9a7e;
+  --accent-contrast: #ffffff;
+
+  --red: #f26d6d;
+  --red-rgb: 242, 109, 109;
+  --green: #7dc98f;
+  --green-rgb: 125, 201, 143;
+  --amber: #e3a13c;
+  --amber-rgb: 227, 161, 60;
+  --gold: #e3a13c;
+
+  --border: #2e211c;
+  --border-light: #3c2c24;
+
+  --hover-1: rgba(255, 220, 200, 0.05);
+  --hover-2: rgba(255, 220, 200, 0.1);
+  --inset: rgba(0, 0, 0, 0.28);
+
+  --overlay: rgba(12, 6, 4, 0.65);
+  --overlay-strong: rgba(12, 6, 4, 0.78);
+  --glass: rgba(25, 18, 16, 0.72);
+
+  --shadow-sm: 0 4px 12px rgba(8, 3, 2, 0.38);
+  --shadow-md: 0 8px 24px rgba(8, 3, 2, 0.52);
+  --shadow-lg: 0 16px 48px rgba(8, 3, 2, 0.62);
+  --shadow-xl: 0 32px 90px rgba(8, 3, 2, 0.82);
+}
+
+/* ── Paper — warm light ────────────────────────────── */
+[data-theme="paper"] {
+  color-scheme: light;
+
+  --bg-0: #f7f3ec;
+  --bg-1: #f1ece2;
+  --bg-2: #eae4d7;
+  --bg-3: #e1d9c9;
+  --bg-4: #d5ccb9;
+
+  --tx-1: #2c2620;
+  --tx-2: #6b6156;
+  --tx-3: #9c9184;
+
+  --accent: #b05730;
+  --accent-rgb: 176, 87, 48;
+  --accent-light: #8a4423;
+  --accent-contrast: #ffffff;
+
+  --red: #c0392b;
+  --red-rgb: 192, 57, 43;
+  --green: #1e8e5a;
+  --green-rgb: 30, 142, 90;
+  --amber: #a8770e;
+  --amber-rgb: 168, 119, 14;
+  --gold: #a8770e;
+
+  --border: #ded4c2;
+  --border-light: #cfc4ae;
+
+  --hover-1: rgba(60, 45, 25, 0.05);
+  --hover-2: rgba(60, 45, 25, 0.1);
+  --inset: rgba(60, 45, 25, 0.06);
+
+  --overlay: rgba(55, 45, 35, 0.4);
+  --overlay-strong: rgba(55, 45, 35, 0.55);
+  --glass: rgba(247, 243, 236, 0.75);
+
+  --shadow-sm: 0 4px 12px rgba(90, 70, 50, 0.1);
+  --shadow-md: 0 8px 24px rgba(90, 70, 50, 0.14);
+  --shadow-lg: 0 16px 48px rgba(90, 70, 50, 0.18);
+  --shadow-xl: 0 32px 90px rgba(90, 70, 50, 0.24);
+}
+
+/* ── Snow — cool light ─────────────────────────────── */
+[data-theme="snow"] {
+  color-scheme: light;
+
+  --bg-0: #fafbfc;
+  --bg-1: #f2f4f7;
+  --bg-2: #eaedf2;
+  --bg-3: #dfe3ea;
+  --bg-4: #d2d8e2;
+
+  --tx-1: #1f2430;
+  --tx-2: #5a6372;
+  --tx-3: #8b94a5;
+
+  --accent: #4666e5;
+  --accent-rgb: 70, 102, 229;
+  --accent-light: #3350c4;
+  --accent-contrast: #ffffff;
+
+  --red: #d3382f;
+  --red-rgb: 211, 56, 47;
+  --green: #15803d;
+  --green-rgb: 21, 128, 61;
+  --amber: #a16207;
+  --amber-rgb: 161, 98, 7;
+  --gold: #a16207;
+
+  --border: #e2e6ec;
+  --border-light: #d3d9e2;
+
+  --hover-1: rgba(30, 45, 80, 0.05);
+  --hover-2: rgba(30, 45, 80, 0.09);
+  --inset: rgba(30, 45, 80, 0.05);
+
+  --overlay: rgba(25, 32, 48, 0.4);
+  --overlay-strong: rgba(25, 32, 48, 0.55);
+  --glass: rgba(250, 251, 252, 0.75);
+
+  --shadow-sm: 0 4px 12px rgba(35, 45, 70, 0.08);
+  --shadow-md: 0 8px 24px rgba(35, 45, 70, 0.12);
+  --shadow-lg: 0 16px 48px rgba(35, 45, 70, 0.16);
+  --shadow-xl: 0 32px 90px rgba(35, 45, 70, 0.22);
+}

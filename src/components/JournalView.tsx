@@ -1,9 +1,39 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store/useStore';
 import { CalendarDays, BookOpen, Clock } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import { fireConfetti } from '../confetti';
+
+/* Streak milestones worth a celebration. Each fires once per streak —
+   the celebrated-set resets when the streak breaks. */
+const STREAK_MILESTONES = [7, 30, 100];
+
+function celebrateStreakMilestones(streak: number) {
+  let celebrated: number[];
+  try { celebrated = JSON.parse(localStorage.getItem('nopes_streak_celebrated') || '[]'); }
+  catch { celebrated = []; }
+
+  if (streak < STREAK_MILESTONES[0]) {
+    // Streak broken/low — allow future celebrations again
+    if (celebrated.length) localStorage.setItem('nopes_streak_celebrated', '[]');
+    return;
+  }
+
+  const due = STREAK_MILESTONES.filter(m => streak >= m && !celebrated.includes(m));
+  if (due.length === 0) return;
+
+  fireConfetti();
+  const top = Math.max(...due);
+  toast(`🔥 ${top}-day writing streak!`, { duration: 5000, icon: '🎉' });
+  localStorage.setItem('nopes_streak_celebrated', JSON.stringify([...celebrated, ...due]));
+}
 
 /* ─── Helpers ────────────────────────────────────────────── */
-const today = () => new Date().toISOString().slice(0, 10);
+// Local-timezone ISO date — toISOString() is UTC and shifts the
+// day for anyone east/west of Greenwich near midnight.
+const localISO = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const today = () => localISO(new Date());
 
 function wordCount(text: string) {
   return text.trim() ? text.trim().split(/\s+/).length : 0;
@@ -31,7 +61,7 @@ function buildWeekGrid(weeks: number) {
     for (let d = 0; d < DAYS; d++) {
       const day = new Date(startOfSunday);
       day.setDate(startOfSunday.getDate() + w * 7 + d);
-      week.push(day.toISOString().slice(0, 10));
+      week.push(localISO(day));
     }
     grid.push(week);
   }
@@ -39,7 +69,7 @@ function buildWeekGrid(weeks: number) {
 }
 
 function heatColor(count: number, max: number): string {
-  if (count === 0) return 'rgba(255,255,255,0.05)';
+  if (count === 0) return 'var(--hover-1)';
   const t = Math.min(count / Math.max(max, 1), 1);
   const r = Math.round(16  + t * 4);
   const g = Math.round(185 * t + 40 * (1 - t));
@@ -253,12 +283,19 @@ export const JournalView: React.FC = () => {
   const streak     = useMemo(() => {
     let count = 0;
     const d = new Date();
-    while (journalStats[d.toISOString().slice(0, 10)]) {
+    // An empty "today" shouldn't zero an active streak — start
+    // counting from yesterday if today has no words yet.
+    if (!journalStats[localISO(d)]) d.setDate(d.getDate() - 1);
+    while (journalStats[localISO(d)]) {
       count++;
       d.setDate(d.getDate() - 1);
     }
     return count;
   }, [journalStats]);
+
+  useEffect(() => {
+    if (Object.keys(journalStats).length > 0) celebrateStreakMilestones(streak);
+  }, [streak, journalStats]);
 
   return (
     <div className="journal-shell">

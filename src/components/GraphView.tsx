@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import { useStore } from '../store/useStore';
+import { cssToken } from '../themes';
 
 interface Props {
   isMini?: boolean;
@@ -9,7 +10,14 @@ interface Props {
 const COLORS = ['#a78bfa', '#60a5fa', '#34d399', '#fbbf24', '#f87171', '#f472b6', '#38bdf8', '#818cf8'];
 
 export const GraphView: React.FC<Props> = ({ isMini = false }) => {
-  const { graphData, openFile, setViewMode, createNodeFromGraph } = useStore();
+  const { graphData, openFile, setViewMode, createNodeFromGraph, theme } = useStore();
+
+  // Resolved theme tokens for canvas drawing (canvas can't use CSS var())
+  const tokens = useMemo(() => ({
+    bg: cssToken('--bg-0') || '#161616',
+    label: cssToken('--tx-1') || '#e8e8e8',
+    accentRgb: cssToken('--accent-rgb') || '124, 109, 255',
+  }), [theme]);
   const ref = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -54,9 +62,28 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
     if (!activeTag) return graphData;
     const nodes = graphData.nodes.filter(n => (n.tags || []).includes(activeTag));
     const nodeIds = new Set(nodes.map(n => n.id));
-    const links = graphData.links.filter(l => nodeIds.has(l.source) && nodeIds.has(l.target));
+    // force-graph mutates link.source/target from ids into node objects
+    const endpointId = (e: any) => (typeof e === 'object' && e !== null ? e.id : e);
+    const links = graphData.links.filter(l => nodeIds.has(endpointId(l.source)) && nodeIds.has(endpointId(l.target)));
     return { nodes, links };
   }, [graphData, activeTag]);
+
+  // Delight: pulse a particle along links that appear while the graph is
+  // open — creating a [[link]] makes the connection visibly travel.
+  const prevLinkKeys = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const endpointId = (e: any) => (typeof e === 'object' && e !== null ? e.id : e);
+    const keyOf = (l: any) => `${endpointId(l.source)}→${endpointId(l.target)}`;
+    const keys = new Set(graphData.links.map(keyOf));
+    if (prevLinkKeys.current !== null && !isMini) {
+      const fresh = graphData.links.filter(l => !prevLinkKeys.current!.has(keyOf(l)));
+      const fg: any = ref.current;
+      if (fresh.length > 0 && fg?.emitParticle) {
+        fresh.slice(0, 20).forEach(l => { try { fg.emitParticle(l); } catch {} });
+      }
+    }
+    prevLinkKeys.current = keys;
+  }, [graphData.links, isMini]);
 
   useEffect(() => {
     if (!ref.current || !isMounted.current) return;
@@ -90,12 +117,12 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
     const isMuted = activeTag && !(node.tags || []).includes(activeTag);
     ctx.globalAlpha = isMuted ? 0.15 : 1.0;
 
-    // Node circle
+    // Node circle with a soft white rim so overlapping nodes stay distinct
     ctx.beginPath();
     ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
     ctx.fillStyle = color;
     ctx.fill();
-    ctx.strokeStyle = `rgba(min(255, red+50), min(255, green+50), min(255, blue+50), 0.4)`; // hack for generic stroke mapping
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
     ctx.lineWidth = 1;
     ctx.stroke();
 
@@ -103,10 +130,11 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
     if (!isMini && globalScale >= 0.8 && !isMuted) {
       const label = node.label as string;
       const fontSize = 11 / globalScale;
-      ctx.font = `${fontSize}px Inter, sans-serif`;
+      ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillStyle = 'rgba(232,232,232,0.85)';
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = tokens.label;
       ctx.fillText(label, node.x, node.y + r + 3);
     }
     ctx.globalAlpha = 1.0; // reset
@@ -135,7 +163,7 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button 
                 onClick={() => setActiveTag(null)}
-                style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', background: !activeTag ? 'var(--accent)' : 'var(--bg-3)', color: !activeTag ? '#fff' : 'var(--tx-2)' }}
+                style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', background: !activeTag ? 'var(--accent)' : 'var(--bg-3)', color: !activeTag ? 'var(--accent-contrast)' : 'var(--tx-2)' }}
               >
                 All
               </button>
@@ -143,7 +171,7 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
                 <button 
                   key={tag} 
                   onClick={() => setActiveTag(tag)}
-                  style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', background: activeTag === tag ? 'var(--accent)' : 'var(--bg-3)', color: activeTag === tag ? '#fff' : 'var(--tx-2)' }}
+                  style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '12px', background: activeTag === tag ? 'var(--accent)' : 'var(--bg-3)', color: activeTag === tag ? 'var(--accent-contrast)' : 'var(--tx-2)' }}
                 >
                   #{tag}
                 </button>
@@ -158,13 +186,16 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
             nodeCanvasObject={nodeCanvasObject}
             nodeLabel="label"
             linkColor={(link: any) => {
-               if (!activeTag) return 'rgba(124,109,255,0.25)';
+               if (!activeTag) return `rgba(${tokens.accentRgb}, 0.25)`;
                const sHas = (link.source.tags || []).includes(activeTag);
                const tHas = (link.target.tags || []).includes(activeTag);
-               return (sHas || tHas) ? 'rgba(124,109,255,0.25)' : 'rgba(124,109,255,0.05)';
+               return (sHas || tHas) ? `rgba(${tokens.accentRgb}, 0.25)` : `rgba(${tokens.accentRgb}, 0.05)`;
             }}
             linkWidth={1.5}
-            backgroundColor="#161616"
+            linkDirectionalParticleWidth={4}
+            linkDirectionalParticleSpeed={0.02}
+            linkDirectionalParticleColor={() => `rgba(${tokens.accentRgb}, 0.9)`}
+            backgroundColor={tokens.bg}
             onNodeClick={onNodeClick}
             onBackgroundClick={handleBackgroundClick}
             enableNodeDrag
@@ -183,8 +214,8 @@ export const GraphView: React.FC<Props> = ({ isMini = false }) => {
       <ForceGraph2D
         ref={ref}
         graphData={graphData}
-        nodeColor={() => '#7c6dff'}
-        linkColor={() => 'rgba(124,109,255,0.3)'}
+        nodeColor={() => cssToken('--accent') || '#7c6dff'}
+        linkColor={() => `rgba(${tokens.accentRgb}, 0.3)`}
         nodeRelSize={3}
         linkWidth={1}
         backgroundColor="transparent"

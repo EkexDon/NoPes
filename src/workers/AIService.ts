@@ -43,6 +43,16 @@ function getWorker(): Worker {
         else resolve(e.data);
       }
     };
+    // If the worker dies (OOM, script error), fail every pending call
+    // instead of leaving their promises hanging forever.
+    worker.onerror = (e: ErrorEvent) => {
+      console.error('[AIService] Worker crashed:', e.message);
+      const err = new Error(`AI worker crashed: ${e.message || 'unknown error'}`);
+      pendingCallbacks.forEach(({ reject }) => reject(err));
+      pendingCallbacks.clear();
+      statusListeners.forEach(fn => fn('error'));
+      AIService.terminate();
+    };
   }
   return worker;
 }

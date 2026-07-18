@@ -24,3 +24,5 @@ dist-ssr
 *.sw?
 src-tauri/ollama/
 src-tauri/target/
+.gstack/
+.claude-flow/
