@@ -2926,6 +2926,26 @@ button:disabled {
   border-radius: var(--radius-md);
 }
 
+.ai-insight-status,
+.ai-insight-error,
+.ai-summary {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.ai-insight-status { color: var(--tx-2); }
+.ai-insight-error { color: var(--danger, #ef4444); }
+.ai-summary { color: var(--tx-1); }
+.ai-insight-label {
+  margin-top: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--tx-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .ai-tags-row {
   display: flex;
   gap: 6px;
@@ -5090,3 +5110,104 @@ input:checked + .nopes-slider:before {
   background: var(--bd-1);
   margin: 6px 8px;
 }
+
+/* ======================================================
+   FINDER-STYLE HOME WORKSPACE
+   ====================================================== */
+.finder-home { display: flex; flex-direction: column; min-width: 0; }
+.finder-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  padding: 18px 24px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.finder-toolbar-title { display: flex; align-items: baseline; gap: 12px; }
+.finder-toolbar-title h1 { font-size: 1.35rem; font-weight: 650; }
+.finder-toolbar-title span, .finder-selection-count { color: var(--tx-3); font-size: .78rem; }
+.finder-toolbar-actions { display: flex; align-items: center; gap: 8px; }
+.finder-toolbar-button {
+  display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+  color: var(--tx-2); border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1);
+}
+.finder-toolbar-button:hover { color: var(--accent); border-color: var(--accent); }
+.finder-select {
+  height: 32px; padding: 0 8px; color: var(--tx-2); background: var(--bg-1);
+  border: 1px solid var(--border); border-radius: 6px; font-size: .76rem; outline: none;
+}
+.finder-select:focus { border-color: var(--accent); }
+.finder-breadcrumbs {
+  display: flex; align-items: center; gap: 3px; padding: 9px 24px;
+  color: var(--tx-3); border-bottom: 1px solid var(--border); font-size: .8rem;
+}
+.finder-breadcrumbs button { padding: 4px 7px; border-radius: 5px; color: var(--tx-2); }
+.finder-breadcrumbs button:hover, .finder-breadcrumbs button.active { background: var(--accent-dim); color: var(--accent); }
+.finder-content { flex: 1; overflow: auto; padding: 24px; }
+.finder-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
+  align-content: start; gap: 10px; min-height: 100%;
+}
+.finder-card {
+  position: relative; display: flex; flex-direction: column; align-items: center;
+  gap: 4px; min-height: 142px; padding: 13px 8px 10px; border: 1px solid transparent;
+  border-radius: 8px; cursor: default; user-select: none;
+}
+.finder-card:hover { background: var(--hover-1); }
+.finder-card.is-selected { background: var(--accent-dim); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.finder-card.is-drag-over { background: color-mix(in srgb, var(--accent) 20%, transparent); outline: 2px dashed var(--accent); }
+.finder-card-art {
+  width: 78px; height: 78px; display: flex; align-items: center; justify-content: center;
+  color: var(--accent); overflow: hidden; border-radius: 9px;
+}
+.finder-folder-art { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; }
+.finder-folder-emoji { font-size: 52px; line-height: 1; }
+.finder-card-name { max-width: 128px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx-1); font-size: .82rem; }
+.finder-card-type { color: var(--tx-3); font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; }
+.finder-card-dot { position: absolute; top: 8px; right: 9px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.finder-grid.list-view { display: flex; flex-direction: column; gap: 2px; }
+.finder-grid.list-view .finder-card {
+  min-height: 44px; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 6px 12px;
+}
+.finder-grid.list-view .finder-card-art { width: 30px; height: 30px; }
+.finder-grid.list-view .finder-card-art svg { width: 27px; height: 27px; }
+.finder-grid.list-view .finder-folder-art { width: 29px; height: 29px; }
+.finder-grid.list-view .finder-folder-emoji { font-size: 25px; }
+.finder-grid.list-view .finder-card-type { margin-left: auto; margin-right: 15px; }
+.finder-date-heading {
+  grid-column: 1 / -1; padding: 12px 4px 7px; margin-top: 8px; color: var(--tx-2);
+  font-size: .9rem; font-weight: 650; border-bottom: 1px solid var(--border);
+}
+.finder-empty {
+  min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 9px; color: var(--tx-3); text-align: center;
+}
+.finder-empty strong { color: var(--tx-2); font-size: 1rem; }
+.finder-empty svg { color: var(--accent); opacity: .6; }
+.finder-new-menu { min-width: 190px; }
+.finder-modal-overlay {
+  position: fixed; inset: 0; z-index: 1100; display: flex; align-items: center; justify-content: center;
+  background: var(--overlay); backdrop-filter: blur(3px);
+}
+.finder-small-modal, .finder-art-modal {
+  width: min(430px, calc(100vw - 32px)); background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: var(--shadow-md); padding: 20px;
+}
+.finder-small-modal h3 { margin-bottom: 16px; }
+.finder-small-modal input {
+  width: 100%; padding: 10px 12px; color: var(--tx-1); background: var(--bg-0);
+  border: 1px solid var(--border); border-radius: 7px; outline: none;
+}
+.finder-small-modal input:focus { border-color: var(--accent); }
+.finder-modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.finder-modal-header button { color: var(--tx-3); }
+.finder-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.finder-folder-list { display: flex; flex-direction: column; gap: 3px; max-height: 300px; overflow: auto; }
+.finder-folder-list button {
+  display: flex; align-items: center; gap: 10px; padding: 9px; border-radius: 6px; color: var(--tx-1); text-align: left;
+}
+.finder-folder-list button:hover { background: var(--accent-dim); color: var(--accent); }
+.finder-art-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.finder-art-options button {
+  min-height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; color: var(--tx-2); background: var(--bg-0); border: 1px solid var(--border); border-radius: 8px;
+}
+.finder-art-options button:hover { color: var(--accent); border-color: var(--accent); }
+.finder-art-options span { font-size: 32px; }
+.finder-drawing-canvas { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; touch-action: none; cursor: crosshair; }

@@ -12,6 +12,7 @@ env.useBrowserCache  = true;
 type Embedder = Awaited<ReturnType<typeof pipeline>>;
 
 let embedder: Embedder | null = null;
+let embedderPromise: Promise<Embedder> | null = null;
 let searchIndex: { path: string; label: string; vec: Float32Array }[] = [];
 
 /** Cosine similarity between two Float32Arrays */
@@ -45,16 +46,23 @@ function meanPool(embedTensor: any): Float32Array {
 }
 
 async function getEmbedder(): Promise<Embedder> {
-  if (!embedder) {
+  if (embedder) return embedder;
+  if (!embedderPromise) {
     self.postMessage({ type: 'STATUS', status: 'loading' });
-    embedder = await pipeline(
+    embedderPromise = pipeline(
       'feature-extraction',
       'Xenova/all-MiniLM-L6-v2',
-      { dtype: 'q8' }  // quantized: smaller + faster
-    );
-    self.postMessage({ type: 'STATUS', status: 'ready' });
+      { dtype: 'q8' }
+    ).then(model => {
+      embedder = model;
+      self.postMessage({ type: 'STATUS', status: 'ready' });
+      return model;
+    }).catch(error => {
+      embedderPromise = null;
+      throw error;
+    });
   }
-  return embedder!;
+  return embedderPromise;
 }
 
 async function embed(text: string): Promise<Float32Array> {
@@ -64,6 +72,39 @@ async function embed(text: string): Promise<Float32Array> {
   if (output.data instanceof Float32Array) return output.data as Float32Array;
   // fallback: mean-pool ourselves
   return meanPool(output);
+}
+
+function noteText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!?(?:\[[^\]]*\])\([^)]*\)/g, ' ')
+    .replace(/[#>*_`~\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function summarizeLocally(text: string): Promise<string> {
+  const sentences = noteText(text)
+    .match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map(sentence => sentence.trim()).filter(sentence => sentence.length >= 24).slice(0, 6) ?? [];
+  if (sentences.length === 0) return noteText(text).slice(0, 220);
+  if (sentences.length === 1) return sentences[0];
+  const vectors: Float32Array[] = [];
+  for (const sentence of sentences) vectors.push(await embed(sentence));
+  const centroid = new Float32Array(vectors[0].length);
+  vectors.forEach(vector => vector.forEach((value, index) => { centroid[index] += value / vectors.length; }));
+  const best = sentences.reduce((bestIndex, sentence, index) =>
+    sentence.length <= 240 && cosineSim(vectors[index], centroid) > cosineSim(vectors[bestIndex], centroid) ? index : bestIndex, 0);
+  return sentences[best];
+}
+
+function suggestTagsLocally(text: string, existingTags: string[]): string[] {
+  const existing = new Set(existingTags.map(tag => tag.toLowerCase()));
+  const ignored = new Set(['about', 'after', 'again', 'also', 'and', 'are', 'been', 'being', 'between', 'but', 'can', 'could', 'did', 'does', 'each', 'every', 'for', 'from', 'have', 'into', 'its', 'just', 'more', 'most', 'not', 'note', 'notes', 'only', 'other', 'our', 'over', 'professional', 'should', 'some', 'such', 'than', 'that', 'the', 'their', 'then', 'there', 'these', 'they', 'this', 'those', 'through', 'under', 'using', 'very', 'was', 'what', 'when', 'which', 'while', 'with', 'would', 'you', 'your']);
+  const counts = new Map<string, number>();
+  for (const word of noteText(text).toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}_-]{2,}/gu) ?? []) {
+    if (!ignored.has(word) && !existing.has(word)) counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([word]) => word);
 }
 
 // ── Message Handler ──────────────────────────────────────
@@ -93,6 +134,17 @@ self.onmessage = async (event: MessageEvent) => {
       // Transfer all buffers in one go
       const transferables = results.map(r => r.vec.buffer);
       self.postMessage({ type: 'EMBED_DOCS_OK', id, results }, { transfer: transferables });
+
+    } else if (type === 'SUMMARIZE') {
+      const { text } = event.data as { text: string; id: string };
+      self.postMessage({ type: 'GENERATION_PROGRESS', message: 'Finding the key idea locally…' });
+      const summary = await summarizeLocally(text);
+      self.postMessage({ type: 'SUMMARIZE_OK', id, summary });
+
+    } else if (type === 'GENERATE_TAGS') {
+      const { text, existingTags = [] } = event.data as { text: string; existingTags?: string[]; id: string };
+      self.postMessage({ type: 'GENERATION_PROGRESS', message: 'Finding tags locally…' });
+      self.postMessage({ type: 'GENERATE_TAGS_OK', id, tags: suggestTagsLocally(text, existingTags) });
 
     } else if (type === 'SET_INDEX') {
       const { index } = event.data as {

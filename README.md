@@ -54,8 +54,8 @@ It renders a live, clickable note list that updates as your vault changes. Front
 ### 🗂️ Kanban Boards
 Any note becomes a task board: `##` headings are columns, `- [ ]` items are cards. Drag between columns, add cards inline — everything syncs both ways with the markdown, and prose between columns is never touched.
 
-### 🏠 Home Dashboard, Breadcrumbs & Context Menus
-A visual card dashboard of all notes, canvases, and boards with custom icons, favorites, recents, smart filters, and quick create. Breadcrumb navigation and right-click context menus everywhere.
+### 🏠 Finder-style Home Organization
+Home is a Finder-style workspace for organizing the vault without leaving NoPes. Double-click folders to browse them, use breadcrumbs to move back up, select multiple notes with `⌘`/`Ctrl`, and drag selected items onto folders. Right-click notes or folders to move, tag, favorite, duplicate, reveal in Finder, or delete them. Create folders directly from **New → New Folder**, then customize any folder with a picture or a hand-drawn icon. Folder artwork and note metadata persist across refreshes and moves.
 
 ---
 

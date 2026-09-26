@@ -195,7 +195,7 @@ Install [Ollama](https://ollama.com) once; NoPes starts and stops it for you (Se
 
 ## 8. Views & Visual Thinking
 
-- **Home (⌘H)** — card dashboard of everything: favorites, recents, filters (Notes/Canvas/Kanban/Folders), custom icons (emoji or icon set — click a card's icon), quick create, right-click context menus.
+- **Home (⌘H)** — Finder-style vault organization. Double-click folders to browse, use breadcrumbs to navigate, select multiple items with `⌘`/`Ctrl`, and drag them onto a folder. Right-click a selection to move it, add a tag, favorite, duplicate, reveal it in Finder, or delete it. **New → New Folder** creates a folder in the current location. Right-click a folder → **Customize Folder Artwork** to use the default icon, import a picture, or draw a custom icon. Artwork follows the folder when it is moved.
 - **Canvas (⌘D)** — an infinite Excalidraw whiteboard stored in your vault. Draw, diagram, mind-map. Put `[[Note Name]]` in a shape's link and clicking it opens the note.
 - **Journal (⌘J)** — daily notes (`2026-07-09.md`) with a GitHub-style heatmap of your writing activity. Click any day to open/create that day's note; streaks tracked (and celebrated).
 - **Split view** — the ⫿ icon splits the workspace. The right pane has its own view switcher (editor with its own note picker, Home, Canvas, Graph, Journal, Kanban, Tasks, Review) and a draggable divider. Editor left + Kanban right of the same note is a great combo.

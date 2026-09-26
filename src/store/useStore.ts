@@ -20,6 +20,7 @@ import { VaultIndex, loadPersistedIndex, reconcileIndex, schedulePersist } from 
 import { maybeGenerateDigest } from '../digest';
 import { ClipPayload, buildClipNote, clipNoteName, getClipperToken, extractImageUrls, rewriteImageLinks } from '../clip';
 import { healMediaEmbeds } from '../extensions/imageMarkdown';
+import { normalizeTag } from '../fileOrganization';
 
 /* The Vault Index — incremental extraction layer (tasks, tags, wikilinks,
    frontmatter) behind the Task Dashboard, digest, and future queries.
@@ -63,10 +64,17 @@ export async function scanDir(root: string, opts: { maxDepth: number; maxEntries
     // are never part of the vault's visible tree.
     if (entry.name.startsWith('.')) continue;
     const fullPath = await join(root, entry.name);
+    let modifiedAt: number | undefined;
+    try {
+      const fileStat = await stat(fullPath);
+      const modified = (fileStat as { mtime?: Date | number }).mtime;
+      modifiedAt = modified instanceof Date ? modified.getTime() : typeof modified === 'number' ? modified : undefined;
+    } catch {}
     const info: FileInfo = {
       name: entry.name,
       path: fullPath,
       is_dir: entry.isDirectory,
+      modifiedAt,
       isFavorite: !!favorites?.includes(fullPath)
     };
 
@@ -91,6 +99,7 @@ export interface FileInfo {
   name: string;
   path: string;
   is_dir: boolean;
+  modifiedAt?: number;
   children?: FileInfo[];
   isFavorite?: boolean;
 }
@@ -250,6 +259,7 @@ interface AppState {
   copyToClipboard: (text: string) => Promise<void>;
   duplicateFile: (path: string) => Promise<void>;
   moveItem: (sourcePath: string, targetDir: string) => Promise<void>;
+  tagItems: (paths: string[], tag: string) => Promise<void>;
 
   setPendingAssetInserts: (assets: string[]) => void;
   addMedia: (item: MediaItem) => void;
@@ -1091,6 +1101,22 @@ This is a canvas board.
           set({ tabs: newTabs, tabContents: newTabContents, activeTab: newActive });
         }
 
+        const metadata = get().fileMetadata;
+        const movedMetadata: Record<string, FileMetadata> = {};
+        for (const [path, value] of Object.entries(metadata)) {
+          if (path === sourcePath || path.startsWith(`${sourcePath}/`)) {
+            movedMetadata[finalPath + path.slice(sourcePath.length)] = value;
+          }
+        }
+        if (Object.keys(movedMetadata).length) {
+          const nextMetadata = { ...metadata };
+          for (const path of Object.keys(movedMetadata)) {
+            delete nextMetadata[path === finalPath ? sourcePath : sourcePath + path.slice(finalPath.length)];
+          }
+          set({ fileMetadata: { ...nextMetadata, ...movedMetadata } });
+          localStorage.setItem('nopes_file_metadata', JSON.stringify({ ...nextMetadata, ...movedMetadata }));
+        }
+
         toast.success(`Moved as "${newFileName}"`);
         await get().loadFiles();
         await get().loadGraphData();
@@ -1121,6 +1147,22 @@ This is a canvas board.
         set({ tabs: newTabs, tabContents: newTabContents, activeTab: newActive });
       }
 
+      const metadata = get().fileMetadata;
+      const movedMetadata: Record<string, FileMetadata> = {};
+      for (const [path, value] of Object.entries(metadata)) {
+        if (path === sourcePath || path.startsWith(`${sourcePath}/`)) {
+          movedMetadata[newPath + path.slice(sourcePath.length)] = value;
+        }
+      }
+      if (Object.keys(movedMetadata).length) {
+        const nextMetadata = { ...metadata };
+        for (const path of Object.keys(movedMetadata)) {
+          delete nextMetadata[sourcePath + path.slice(newPath.length)];
+        }
+        set({ fileMetadata: { ...nextMetadata, ...movedMetadata } });
+        localStorage.setItem('nopes_file_metadata', JSON.stringify({ ...nextMetadata, ...movedMetadata }));
+      }
+
       await get().loadFiles();
       await get().loadGraphData();
       toast.success(`Moved to ${fileName}`);
@@ -1136,9 +1178,40 @@ This is a canvas board.
     if (!base) return;
     try {
       const folderPath = await join(base, name);
-      await mkdir(folderPath); 
+      await mkdir(folderPath);
       await get().loadFiles();
-    } catch (e) { console.error('createFolder error:', e); }
+      toast.success(`Created folder "${name}"`);
+    } catch (e: any) {
+      console.error('createFolder error:', e);
+      toast.error(`Could not create folder: ${e?.message ?? e}`);
+    }
+  },
+
+  tagItems: async (paths, tag) => {
+    const normalized = normalizeTag(tag);
+    if (!normalized) {
+      toast.error('Enter a valid tag');
+      return;
+    }
+    let tagged = 0;
+    for (const path of paths) {
+      if (!path.toLowerCase().endsWith('.md')) continue;
+      try {
+        const content = await readTextFile(path);
+        const tags = extractTags(content);
+        if (tags.includes(normalized)) continue;
+        const suffix = content.endsWith('\n') ? '' : '\n';
+        await get().saveFile(path, `${content}${suffix}\n#${normalized}\n`);
+        tagged++;
+      } catch (e) {
+        console.error('tagItems error:', path, e);
+      }
+    }
+    if (tagged) {
+      await get().loadFiles();
+      await get().loadGraphData();
+      toast.success(`Tagged ${tagged} ${tagged === 1 ? 'note' : 'notes'} with #${normalized}`);
+    }
   },
 
   deleteItem: async (path) => {

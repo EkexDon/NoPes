@@ -8,6 +8,7 @@ let worker: Worker | null = null;
 let pendingCallbacks: Map<string, { resolve: (v: any) => void; reject: (e: any) => void }> = new Map();
 let statusListeners: ((status: 'idle' | 'loading' | 'ready' | 'error') => void)[] = [];
 let progressListeners: ((done: number, total: number) => void)[] = [];
+let generationListeners: ((message: string) => void)[] = [];
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 let syncedIndexRef: { path: string; label: string; vec: Float32Array }[] | null = null;
 let initPromise: Promise<void> | null = null;
@@ -34,6 +35,10 @@ function getWorker(): Worker {
       }
       if (type === 'EMBED_PROGRESS') {
         progressListeners.forEach(fn => fn(e.data.done, e.data.total));
+        return;
+      }
+      if (type === 'GENERATION_PROGRESS') {
+        generationListeners.forEach(fn => fn(e.data.message));
         return;
       }
       if (id && pendingCallbacks.has(id)) {
@@ -67,7 +72,15 @@ function call<T>(msg: object, transfer?: Transferable[]): Promise<T> {
   const id = Math.random().toString(36).slice(2);
   resetIdleTimer();
   return new Promise((resolve, reject) => {
-    pendingCallbacks.set(id, { resolve, reject });
+    const timeout = setTimeout(() => {
+      if (!pendingCallbacks.has(id)) return;
+      pendingCallbacks.delete(id);
+      reject(new Error('Local AI request timed out. Check your internet connection for the first model download, then try again.'));
+    }, 120_000);
+    pendingCallbacks.set(id, {
+      resolve: value => { clearTimeout(timeout); resolve(value); },
+      reject: error => { clearTimeout(timeout); reject(error); },
+    });
     const w = getWorker();
     if (transfer?.length) {
       w.postMessage({ ...msg, id }, transfer);
@@ -88,6 +101,11 @@ export const AIService = {
     return () => { progressListeners = progressListeners.filter(f => f !== fn); };
   },
 
+  onGenerationProgress(fn: (message: string) => void) {
+    generationListeners.push(fn);
+    return () => { generationListeners = generationListeners.filter(f => f !== fn); };
+  },
+
   async init(): Promise<void> {
     if (!initPromise) {
       initPromise = call({ type: 'INIT' }).then(() => undefined).finally(() => {
@@ -105,6 +123,16 @@ export const AIService = {
   async embedDocs(docs: { path: string; text: string }[]): Promise<{ path: string; vec: Float32Array }[]> {
     const res = await call<{ results: { path: string; vec: Float32Array }[] }>({ type: 'EMBED_DOCS', docs });
     return res.results;
+  },
+
+  async summarize(text: string): Promise<string> {
+    const res = await call<{ summary: string }>({ type: 'SUMMARIZE', text });
+    return res.summary;
+  },
+
+  async generateTags(text: string, existingTags: string[] = []): Promise<string[]> {
+    const res = await call<{ tags: string[] }>({ type: 'GENERATE_TAGS', text, existingTags });
+    return res.tags;
   },
 
   async search(

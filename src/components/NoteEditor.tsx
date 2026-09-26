@@ -957,7 +957,7 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const { 
     allFiles, activeTab, tabContents, saveFile, openFile, createFile, graphData,
     pendingAssetInserts, setPendingAssetInserts, aiIndex,
-    zenMode
+    zenMode, isAiEnabled
   } = useStore();
   
   const currentTab = tabId || activeTab;
@@ -967,6 +967,10 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
   const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
   const [suggestedLinks, setSuggestedLinks] = useState<LinkSuggestion[]>([]);
   const [aiStatus, setAiStatus] = useState('idle');
+  const [aiSummary, setAiSummary] = useState('');
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiProgress, setAiProgress] = useState('');
+  const [aiError, setAiError] = useState('');
   const allFilesRef = useRef(allFiles);
   const tabContentsRef = useRef(tabContents);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1018,13 +1022,16 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
 
   // AI Tag Suggestions
   useEffect(() => {
-    const unsub = AIService.onStatus(setAiStatus);
-    return unsub;
+    const unsubStatus = AIService.onStatus(setAiStatus);
+    const unsubProgress = AIService.onGenerationProgress(setAiProgress);
+    return () => {
+      unsubStatus();
+      unsubProgress();
+    };
   }, []);
 
   useEffect(() => {
-    const { isAiEnabled } = useStore.getState();
-    if (!isAiEnabled || aiStatus !== 'ready' || content.length < 50 || !aiIndex.length) return;
+    if (!isAiEnabled || aiGenerating || aiStatus !== 'ready' || content.length < 50 || !aiIndex.length) return;
     const to = setTimeout(async () => {
       try {
         const qVec = await AIService.embedQuery(content);
@@ -1050,7 +1057,31 @@ export const NoteEditor: React.FC<{ tabId?: string }> = ({ tabId }) => {
       } catch {}
     }, 1500);
     return () => clearTimeout(to);
-  }, [content, aiIndex, aiStatus, currentTab]);
+  }, [content, aiIndex, aiStatus, currentTab, aiGenerating]);
+
+  useEffect(() => {
+    setAiSummary('');
+    setAiError('');
+  }, [currentTab]);
+
+  const generateAiInsights = useCallback(async () => {
+    if (!isAiEnabled || content.trim().length < 50) return;
+    setAiGenerating(true);
+    setAiProgress('Starting local AI…');
+    setAiError('');
+    try {
+      const summary = await AIService.summarize(content);
+      const generatedTags = await AIService.generateTags(content, extractTags(content));
+      setAiSummary(summary);
+      setSuggestedTags(previous => Array.from(new Set([...generatedTags, ...previous])).slice(0, 5));
+    } catch (error) {
+      console.error('[NoteEditor] Local AI generation failed:', error);
+      setAiError(error instanceof Error ? error.message : 'Local AI could not generate insights. Please try again.');
+    } finally {
+      setAiGenerating(false);
+      setAiProgress('');
+    }
+  }, [content, isAiEnabled]);
 
   interface UnlinkedHit { file: (typeof allFiles)[number]; count: number; snippet: string }
   const [unlinkedMentions, setUnlinkedMentions] = useState<UnlinkedHit[]>([]);
@@ -1881,6 +1912,14 @@ useEffect(() => {
           }} title="Export to PDF (Print)">
             <Printer size={15} />
           </button>
+          <button
+            className={`icon-btn sm ${aiSummary ? 'is-active' : ''}`}
+            title={isAiEnabled ? 'Generate local AI summary and tags' : 'Enable AI Features in Settings to use local AI'}
+            disabled={!isAiEnabled || content.trim().length < 50 || aiGenerating}
+            onClick={generateAiInsights}
+          >
+            <Sparkles size={15} />
+          </button>
           <VoiceMemoButton
             onResult={(transcript, audioRelPath) => {
               if (!editor || editor.isDestroyed) return;
@@ -1967,14 +2006,17 @@ useEffect(() => {
           <PropertiesBar notePath={currentTab} />
           <EditorContent editor={editor} />
           
-          {(backlinksFiles.length > 0 || unlinkedMentions.length > 0 || suggestedTags.length > 0 || suggestedLinks.length > 0) && (
+          {(backlinksFiles.length > 0 || unlinkedMentions.length > 0 || suggestedTags.length > 0 || suggestedLinks.length > 0 || aiSummary || aiGenerating || aiError) && (
             <div className="backlinks-pane">
               
-              {(suggestedTags.length > 0 || suggestedLinks.length > 0) && (
+              {(suggestedTags.length > 0 || suggestedLinks.length > 0 || aiSummary || aiGenerating || aiError) && (
                 <div className="ai-tag-suggestions">
                   <div className="backlinks-header" style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--accent)' }}>
-                    <Sparkles size={12} /> AI Suggestions
+                    <Sparkles size={12} /> Local AI Insights
                   </div>
+                  {aiGenerating && <div className="ai-insight-status">{aiProgress || 'Generating summary and tags locally…'}</div>}
+                  {aiError && <div className="ai-insight-error">{aiError}</div>}
+                  {aiSummary && <p className="ai-summary">{aiSummary}</p>}
                   {suggestedLinks.length > 0 && (
                     <div className="ai-links-row">
                       {suggestedLinks.map(sug => (
@@ -2003,6 +2045,7 @@ useEffect(() => {
                       ))}
                     </div>
                   )}
+                  {suggestedTags.length > 0 && <div className="ai-insight-label">Suggested tags</div>}
                   <div className="ai-tags-row">
                     {suggestedTags.map(t => (
                       <button 

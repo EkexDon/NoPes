@@ -1,736 +1,399 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { useStore, FileMetadata } from '../store/useStore';
-import { readTextFile } from '@tauri-apps/plugin-fs';
-import { 
-  FileText, 
-  Layout, 
-  Kanban, 
-  Folder, 
-  Star, 
-  Clock, 
-  Grid3X3,
-  Plus,
-  Search,
-  MoreHorizontal,
-  Smile,
-  Type,
-  ExternalLink,
-  FolderOpen,
-  Trash2,
-  Copy,
-  Heart,
-  Palette,
-  LayoutGrid
-} from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { readFile } from '@tauri-apps/plugin-fs';
 import {
-  BookOpen, Lightbulb, Target, Bookmark, Flag, Tag, Calendar,
-  BarChart, PieChart, TrendingUp, Activity, Zap,
-  Code, Terminal, Database, Server, Cloud,
-  Home, Settings, User, Users, Mail, MessageSquare,
+  ChevronRight, Copy, ExternalLink, FileText, Folder, FolderPlus, Grid3X3,
+  Heart, Kanban, Layout, List, Palette, Plus, Search,
+  Tag, Trash2, Upload, X
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { ContextMenu } from './ContextMenu';
+import { useStore, FileInfo, FileMetadata } from '../store/useStore';
+import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { useContextMenu } from '../hooks/useContextMenu';
+import { canMoveInto, isDirectChild, parentPath } from '../fileOrganization';
 
-// Explicit map — `require('lucide-react')` doesn't exist in the Vite
-// browser build and crashed the picker's Icons tab.
-const LUCIDE_ICON_MAP: Record<string, React.ComponentType<{ size?: number }>> = {
-  FileText, BookOpen, Lightbulb, Target, Star, Heart,
-  Folder, Bookmark, Flag, Tag, Clock, Calendar,
-  BarChart, PieChart, TrendingUp, Activity, Zap,
-  Code, Terminal, Database, Server, Cloud,
-  Home, Settings, User, Users, Mail, MessageSquare,
-};
+type HomeItem = { path: string; name: string; is_dir: boolean; modifiedAt?: number };
+const pathName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+const POSITIONS_KEY = 'nopes_home_positions';
+type Grouping = 'none' | 'date';
+type DateFilter = 'all' | 'today' | '7days' | '30days';
 
-// Icon picker component for selecting emoji/icons
-const IconPicker: React.FC<{
-  currentIcon?: string;
-  currentType?: 'emoji' | 'lucide';
-  onSelect: (icon: string, type: 'emoji' | 'lucide') => void;
-  onClose: () => void;
-}> = ({ currentIcon, currentType, onSelect, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'emoji' | 'icons'>(currentType === 'lucide' ? 'icons' : 'emoji');
-  
-  // Common emojis for notes
-  const emojiCategories = {
-    recent: ['📄', '📝', '📚', '💡', '✅', '⚡', '🎯', '📊'],
-    objects: ['📁', '📂', '🗂️', '📋', '📌', '📎', '🔗', '📎', '✂️', '📐', '📏', '📌'],
-    symbols: ['⭐', '❤️', '💜', '💙', '💚', '💛', '🧡', '🖤', '🤍', '🤎'],
-    nature: ['🌟', '🔥', '💫', '⭐', '🌙', '☀️', '🌈', '💧', '🌊', '🌸'],
-    tech: ['💻', '⌨️', '🖥️', '🖱️', '💾', '💿', '📀', '🎮', '📱', '🔋'],
-  };
-  
-  // Lucide icons for more professional look
-  const lucideIcons = [
-    'FileText', 'BookOpen', 'Lightbulb', 'Target', 'Star', 'Heart',
-    'Folder', 'Bookmark', 'Flag', 'Tag', 'Clock', 'Calendar',
-    'BarChart', 'PieChart', 'TrendingUp', 'Activity', 'Zap',
-    'Code', 'Terminal', 'Database', 'Server', 'Cloud',
-    'Home', 'Settings', 'User', 'Users', 'Mail', 'MessageSquare'
-  ];
+function flattenTree(entries: FileInfo[]): FileInfo[] {
+  return entries.flatMap(entry => [entry, ...(entry.children ? flattenTree(entry.children) : [])]);
+}
 
-  return (
-    <div className="icon-picker-overlay" onClick={onClose}>
-      <div className="icon-picker-modal" onClick={e => e.stopPropagation()}>
-        <div className="icon-picker-header">
-          <h3>Choose Icon</h3>
-          <div className="icon-picker-tabs">
-            <button 
-              className={activeTab === 'emoji' ? 'active' : ''}
-              onClick={() => setActiveTab('emoji')}
-            >
-              <Smile size={16} />
-              Emoji
-            </button>
-            <button 
-              className={activeTab === 'icons' ? 'active' : ''}
-              onClick={() => setActiveTab('icons')}
-            >
-              <Type size={16} />
-              Icons
-            </button>
-          </div>
-        </div>
-        
-        <div className="icon-picker-content">
-          {activeTab === 'emoji' ? (
-            <div className="emoji-grid">
-              {Object.entries(emojiCategories).map(([category, emojis]) => (
-                <div key={category} className="emoji-category">
-                  <span className="emoji-category-label">{category}</span>
-                  <div className="emoji-row">
-                    {emojis.map(emoji => (
-                      <button
-                        key={emoji}
-                        className={`emoji-btn ${currentIcon === emoji ? 'selected' : ''}`}
-                        onClick={() => onSelect(emoji, 'emoji')}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="lucide-grid">
-              {lucideIcons.map(iconName => {
-                const Icon = LUCIDE_ICON_MAP[iconName];
-                return (
-                  <button
-                    key={iconName}
-                    className={`lucide-btn ${currentIcon === iconName ? 'selected' : ''}`}
-                    onClick={() => onSelect(iconName, 'lucide')}
-                    title={iconName}
-                  >
-                    {Icon && <Icon size={20} />}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        
-        <div className="icon-picker-footer">
-          <button className="icon-picker-close" onClick={onClose}>Cancel</button>
-          <button 
-            className="icon-picker-clear"
-            onClick={() => onSelect('', 'emoji')}
-          >
-            Clear Icon
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Individual card component for each item
-const HomeCard: React.FC<{
-  item: { path: string; name: string; is_dir?: boolean };
-  metadata?: FileMetadata;
-  isFavorite?: boolean;
-  onOpen: () => void;
-  onIconChange?: (icon: string, type: 'emoji' | 'lucide') => void;
-  onContextMenu?: (e: React.MouseEvent) => void;
-}> = ({ item, metadata, isFavorite, onOpen, onIconChange, onContextMenu }) => {
-  const [showIconPicker, setShowIconPicker] = useState(false);
-  
-  const getIcon = () => {
-    if (metadata?.icon) {
-      if (metadata.iconType === 'emoji') {
-        return <span className="card-icon-emoji">{metadata.icon}</span>;
-      } else if (metadata.iconType === 'lucide') {
-        // Dynamic import would be better, but for now use a mapping
-        const iconMap: Record<string, React.ReactNode> = {
-          'FileText': <FileText size={32} />,
-          'Layout': <Layout size={32} />,
-          'Kanban': <Kanban size={32} />,
-          'Folder': <Folder size={32} />,
-        };
-        return iconMap[metadata.icon] || <FileText size={32} />;
-      }
-    }
-    
-    // Default icons based on type
-    if (item.is_dir) return <Folder size={32} className="card-icon-default" />;
-    if (metadata?.itemType === 'canvas') return <Layout size={32} className="card-icon-canvas" />;
-    if (metadata?.itemType === 'kanban') return <Kanban size={32} className="card-icon-kanban" />;
-    return <FileText size={32} className="card-icon-note" />;
-  };
-  
-  const getTypeLabel = () => {
-    if (item.is_dir) return 'Folder';
-    if (metadata?.itemType === 'canvas') return 'Canvas';
-    if (metadata?.itemType === 'kanban') return 'Kanban';
-    return 'Note';
-  };
-  
-  const getColor = () => {
-    if (metadata?.color) return metadata.color;
-    if (item.is_dir) return 'var(--accent)';
-    if (metadata?.itemType === 'canvas') return 'var(--accent-light)';
-    if (metadata?.itemType === 'kanban') return 'var(--green)';
-    return 'var(--accent-light)';
-  };
-  
-  return (
-    <>
-      <motion.div
-        className="home-card"
-        whileHover={{ y: -2, scale: 1.02 }}
-        whileTap={{ scale: 0.98 }}
-        onClick={onOpen}
-        onContextMenu={onContextMenu}
-        style={{ borderColor: getColor() }}
-      >
-        <div 
-          className="home-card-icon-wrapper"
-          style={{ backgroundColor: `color-mix(in srgb, ${getColor()} 9%, transparent)` }}
-          onClick={e => {
-            e.stopPropagation();
-            setShowIconPicker(true);
-          }}
-        >
-          {getIcon()}
-          <div className="home-card-icon-edit">
-            <MoreHorizontal size={14} />
-          </div>
-        </div>
-        
-        <div className="home-card-content">
-          <h4 className="home-card-title">{item.name.replace(/\.md$/, '')}</h4>
-          <span className="home-card-type">{getTypeLabel()}</span>
-        </div>
-        
-        {isFavorite && (
-          <div className="home-card-favorite">
-            <Star size={14} fill="currentColor" />
-          </div>
-        )}
-      </motion.div>
-      
-      {showIconPicker && onIconChange && (
-        <IconPicker
-          currentIcon={metadata?.icon}
-          currentType={metadata?.iconType === 'image' ? 'emoji' : metadata?.iconType}
-          onSelect={(icon, type) => {
-            onIconChange(icon, type);
-            setShowIconPicker(false);
-          }}
-          onClose={() => setShowIconPicker(false)}
-        />
-      )}
-    </>
-  );
-};
-
-// Section component for grouping cards
-const HomeSection: React.FC<{
-  title: string;
-  icon: React.ReactNode;
-  items: { path: string; name: string; is_dir?: boolean }[];
-  fileMetadata: Record<string, FileMetadata>;
-  favorites: string[];
-  onOpenItem: (path: string) => void;
-  onIconChange: (path: string, icon: string, type: 'emoji' | 'lucide') => void;
-  onContextMenu?: (item: { path: string; name: string }, event: React.MouseEvent) => void;
-  emptyMessage?: string;
-}> = ({ title, icon, items, fileMetadata, favorites, onOpenItem, onIconChange, onContextMenu, emptyMessage }) => {
-  if (items.length === 0 && emptyMessage) {
-    return (
-      <div className="home-section">
-        <div className="home-section-header">
-          {icon}
-          <h3>{title}</h3>
-          <span className="home-section-count">0</span>
-        </div>
-        <div className="home-section-empty">{emptyMessage}</div>
-      </div>
-    );
+function bytesToDataUrl(bytes: Uint8Array, name: string) {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
-  
-  if (items.length === 0) return null;
-  
-  return (
-    <div className="home-section">
-      <div className="home-section-header">
-        {icon}
-        <h3>{title}</h3>
-        <span className="home-section-count">{items.length}</span>
-      </div>
-      
-      <div className="home-grid">
-        {items.map((item, index) => (
-          <motion.div
-            key={item.path}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: index * 0.05 }}
-          >
-            <HomeCard
-              item={item}
-              metadata={fileMetadata[item.path]}
-              isFavorite={favorites.includes(item.path)}
-              onOpen={() => onOpenItem(item.path)}
-              onIconChange={(icon, type) => onIconChange(item.path, icon, type)}
-              onContextMenu={onContextMenu ? (e) => onContextMenu(item, e) : undefined}
-            />
-          </motion.div>
-        ))}
-      </div>
-    </div>
-  );
+  const ext = name.split('.').pop()?.toLowerCase();
+  const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png';
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
+const FolderArtwork: React.FC<{
+  metadata?: FileMetadata;
+}> = ({ metadata }) => {
+  if (metadata?.iconType === 'image' && metadata.icon) {
+    return <img className="finder-folder-art" src={metadata.icon} alt="" />;
+  }
+  if (metadata?.iconType === 'emoji' && metadata.icon === '📁') {
+    return <Folder size={54} fill="currentColor" strokeWidth={1.4} />;
+  }
+  if (metadata?.iconType === 'emoji' && metadata.icon) {
+    return <span className="finder-folder-emoji">{metadata.icon}</span>;
+  }
+  if (metadata?.iconType === 'lucide' && metadata.icon === 'Folder') {
+    return <Folder size={54} fill="currentColor" strokeWidth={1.4} />;
+  }
+  return <Folder size={54} fill="currentColor" strokeWidth={1.4} />;
 };
 
-// Main HomeView component
-export const HomeView: React.FC = () => {
-  const { 
-    allFiles, 
-    fileMetadata, 
-    favorites, 
-    recentFiles,
-    openFile, 
-    setViewMode,
-    setFileIcon,
-    createFile,
-    createCanvasFile,
-    createKanbanFile,
-    toggleFavorite,
-    deleteItem,
-    revealInFinder,
-    copyToClipboard,
-    duplicateFile
-  } = useStore();
-  
-  const { menu, showMenu, hideMenu } = useContextMenu();
-  
-  const [filter, setFilter] = useState<'all' | 'notes' | 'canvas' | 'kanban' | 'folders'>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showNewMenu, setShowNewMenu] = useState(false);
-  const [itemToDelete, setItemToDelete] = useState<{ path: string; name: string } | null>(null);
-  
-  // Get all items (files and folders)
-  const allItems = useMemo(() => {
-    const items: { path: string; name: string; is_dir?: boolean }[] = [];
-    
-    const traverse = (entries: any[]) => {
-      for (const entry of entries) {
-        if (entry.is_dir) {
-          items.push({ path: entry.path, name: entry.name, is_dir: true });
-          if (entry.children) traverse(entry.children);
-        } else if (entry.name.endsWith('.md') || entry.name.endsWith('.canvas') || entry.name.endsWith('.kanban')) {
-          items.push({ path: entry.path, name: entry.name });
-        }
-      }
-    };
-    
-    // Flatten the file tree
-    const flattenFiles = (files: any[]): any[] => {
-      let flat: any[] = [];
-      for (const f of files) {
-        flat.push(f);
-        if (f.children) flat = flat.concat(flattenFiles(f.children));
-      }
-      return flat;
-    };
-    
-    // Get files from store
-    const store = useStore.getState();
-    const files = flattenFiles(store.files);
-    
-    for (const f of files) {
-      if (f.is_dir) {
-        items.push({ path: f.path, name: f.name, is_dir: true });
-      } else if (f.name.endsWith('.md')) {
-        items.push({ path: f.path, name: f.name });
-      }
-    }
-    
-    return items;
-  }, [allFiles]);
-  
-  // Detect file types from content (Canvas/Kanban markers)
+const DrawingModal: React.FC<{
+  onSave: (dataUrl: string) => void;
+  onClose: () => void;
+}> = ({ onSave, onClose }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const drawing = useRef(false);
   useEffect(() => {
-    const detectTypes = async () => {
-      const store = useStore.getState();
-      const { fileMetadata, setFileMetadata, tabContents } = store;
-      
-      for (const item of allItems) {
-        if (item.is_dir || !item.path.endsWith('.md')) continue;
-        
-        // Skip if type already detected
-        const existingType = fileMetadata[item.path]?.itemType;
-        if (existingType && existingType !== 'note') continue;
-        
-        try {
-          // Check tabContents first (already loaded files)
-          let content = tabContents[item.path];
-          
-          // If not in memory, read from disk
-          if (!content) {
-            content = await readTextFile(item.path);
-          }
-          
-          // Detect type from content
-          let detectedType: FileMetadata['itemType'] = 'note';
-          if (content.includes('<!-- CANVAS -->') || content.includes('data-canvas="true"')) {
-            detectedType = 'canvas';
-          } else if (content.includes('<!-- KANBAN -->') || content.includes('data-kanban="true"')) {
-            detectedType = 'kanban';
-          }
-          
-          // Update metadata if different
-          if (detectedType !== 'note') {
-            setFileMetadata(item.path, {
-              itemType: detectedType,
-              iconType: fileMetadata[item.path]?.iconType || 'emoji'
-            });
-          }
-        } catch (e) {
-          // File might not exist or be unreadable
-        }
-      }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#f7f7f7';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#2367d1';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+  }, []);
+  const point = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (e.currentTarget.width / rect.width),
+      y: (e.clientY - rect.top) * (e.currentTarget.height / rect.height)
     };
-    
-    detectTypes();
-  }, [allItems]);
-  
-  // Filter items
-  const filteredItems = useMemo(() => {
-    let items = allItems;
-    
-    // Type filter
-    if (filter !== 'all') {
-      items = items.filter(item => {
-        if (filter === 'folders') return item.is_dir;
-        const type = fileMetadata[item.path]?.itemType;
-        if (filter === 'notes') return type === 'note' || (!type && !item.is_dir);
-        if (filter === 'canvas') return type === 'canvas';
-        if (filter === 'kanban') return type === 'kanban';
-        return true;
-      });
-    }
-    
-    // Search filter
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      items = items.filter(item => 
-        item.name.toLowerCase().includes(q) ||
-        fileMetadata[item.path]?.description?.toLowerCase().includes(q)
-      );
-    }
-    
-    return items;
-  }, [allItems, filter, searchQuery, fileMetadata]);
-  
-  // Get favorite items
-  const favoriteItems = useMemo(() => {
-    return allItems.filter(item => favorites.includes(item.path));
-  }, [allItems, favorites]);
-  
-  // Get recent items
-  const recentItems = useMemo(() => {
-    return recentFiles
-      .map(path => allItems.find(item => item.path === path))
-      .filter(Boolean)
-      .slice(0, 8) as { path: string; name: string; is_dir?: boolean }[];
-  }, [allItems, recentFiles]);
-  
-  const handleOpenItem = async (path: string) => {
-    if (path.endsWith('.md')) {
-      await openFile(path);
-      // openFile now automatically detects canvas/kanban and sets viewMode
-      // Don't override it here anymore
-    } else {
-      // Handle folders or other types
-      toast('Opening...', { duration: 1000 });
-    }
   };
-  
-  const handleIconChange = (path: string, icon: string, type: 'emoji' | 'lucide') => {
-    setFileIcon(path, icon, type);
-  };
-  
-  const handleCreateNew = (type: 'note' | 'canvas' | 'kanban') => {
-    if (type === 'note') {
-      createFile('Untitled');
-    } else if (type === 'canvas') {
-      createCanvasFile('Untitled Canvas');
-    } else if (type === 'kanban') {
-      createKanbanFile('Untitled Kanban');
-    }
-    setShowNewMenu(false);
-  };
-
-  // Build context menu items for a file
-  const buildContextMenu = (item: { path: string; name: string; is_dir?: boolean }) => {
-    const isFav = favorites.includes(item.path);
-    const meta = fileMetadata[item.path];
-    const isCanvas = meta?.itemType === 'canvas';
-    const isKanban = meta?.itemType === 'kanban';
-    
-    const menuItems = [
-      {
-        id: 'open',
-        label: 'Open',
-        icon: <FileText size={16} />,
-        action: () => openFile(item.path),
-      },
-      {
-        id: 'open-folder',
-        label: 'Open in Folder',
-        icon: <FolderOpen size={16} />,
-        action: () => {
-          // Navigate to folder in sidebar - just open the file for now
-          openFile(item.path);
-          // Could expand sidebar folder in future
-        },
-      },
-      { id: 'divider1', label: '', divider: true, action: () => {} },
-      {
-        id: 'favorite',
-        label: isFav ? 'Remove from Favorites' : 'Add to Favorites',
-        icon: <Heart size={16} />,
-        action: () => toggleFavorite(item.path),
-      },
-      {
-        id: 'icon',
-        label: 'Change Icon',
-        icon: <Palette size={16} />,
-        action: () => {
-          // Trigger icon picker - this would need a callback to parent
-          // For now, we'll just set a default
-          setFileIcon(item.path, '📝', 'emoji');
-        },
-      },
-      { id: 'divider2', label: '', divider: true, action: () => {} },
-      {
-        id: 'reveal',
-        label: 'Reveal in Finder',
-        icon: <ExternalLink size={16} />,
-        action: () => revealInFinder(item.path),
-      },
-      {
-        id: 'copy-path',
-        label: 'Copy Path',
-        icon: <Copy size={16} />,
-        action: () => copyToClipboard(item.path),
-      },
-      {
-        id: 'duplicate',
-        label: 'Duplicate',
-        icon: <LayoutGrid size={16} />,
-        action: () => duplicateFile(item.path),
-      },
-      { id: 'divider3', label: '', divider: true, action: () => {} },
-      {
-        id: 'delete',
-        label: 'Delete',
-        icon: <Trash2 size={16} />,
-        action: () => setItemToDelete({ path: item.path, name: item.name }),
-      },
-    ];
-
-    // Add view mode options for special files
-    if (isCanvas) {
-      menuItems.splice(2, 0, {
-        id: 'view-canvas',
-        label: 'View as Canvas',
-        icon: <Layout size={16} />,
-        action: () => {
-          openFile(item.path);
-          setViewMode('canvas');
-        },
-      });
-    }
-    if (isKanban) {
-      menuItems.splice(2, 0, {
-        id: 'view-kanban',
-        label: 'View as Kanban',
-        icon: <Kanban size={16} />,
-        action: () => {
-          openFile(item.path);
-          setViewMode('kanban');
-        },
-      });
-    }
-
-    return menuItems;
-  };
-  
   return (
-    <div className="home-view">
-      {/* Header */}
-      <div className="home-header">
-        <div className="home-header-left">
-          <h1>🏠 Home</h1>
-          <span className="home-subtitle">{allItems.length} items in your vault</span>
-        </div>
-        
-        <div className="home-header-right">
-          {/* Search */}
-          <div className="home-search">
-            <Search size={16} />
-            <input
-              type="text"
-              placeholder="Search your vault..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
-          </div>
-          
-          {/* New Button */}
-          <div className="home-new-wrapper">
-            <button 
-              className="home-new-btn"
-              onClick={() => setShowNewMenu(!showNewMenu)}
-            >
-              <Plus size={16} />
-              New
-            </button>
-            
-            {showNewMenu && (
-              <div className="home-new-menu">
-                <button onClick={() => handleCreateNew('note')}>
-                  <FileText size={16} />
-                  New Note
-                </button>
-                <button onClick={() => handleCreateNew('canvas')}>
-                  <Layout size={16} />
-                  New Canvas
-                </button>
-                <button onClick={() => handleCreateNew('kanban')}>
-                  <Kanban size={16} />
-                  New Kanban
-                </button>
-              </div>
-            )}
-          </div>
+    <div className="finder-modal-overlay" onClick={onClose}>
+      <div className="finder-art-modal" onClick={e => e.stopPropagation()}>
+        <div className="finder-modal-header"><strong>Draw folder icon</strong><button onClick={onClose}><X size={18} /></button></div>
+        <canvas
+          ref={canvasRef}
+          width={420}
+          height={280}
+          className="finder-drawing-canvas"
+          onPointerDown={e => {
+            const ctx = e.currentTarget.getContext('2d');
+            if (!ctx) return;
+            drawing.current = true;
+            const p = point(e);
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={e => {
+            if (!drawing.current) return;
+            const ctx = e.currentTarget.getContext('2d');
+            if (!ctx) return;
+            const p = point(e);
+            ctx.lineTo(p.x, p.y);
+            ctx.stroke();
+          }}
+          onPointerUp={() => { drawing.current = false; }}
+          onPointerCancel={() => { drawing.current = false; }}
+        />
+        <div className="finder-modal-actions">
+          <button className="btn secondary" onClick={() => {
+            const ctx = canvasRef.current?.getContext('2d');
+            if (ctx && canvasRef.current) {
+              ctx.fillStyle = '#f7f7f7';
+              ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+            }
+          }}>Clear</button>
+          <button className="btn" onClick={() => canvasRef.current && onSave(canvasRef.current.toDataURL('image/png'))}>Use drawing</button>
         </div>
       </div>
-      
-      {/* Filter Bar */}
-      <div className="home-filter-bar">
-        <div className="home-filters">
-          {(['all', 'notes', 'canvas', 'kanban', 'folders'] as const).map(f => (
-            <button
-              key={f}
-              className={filter === f ? 'active' : ''}
-              onClick={() => setFilter(f)}
-            >
-              {f === 'all' && <Grid3X3 size={14} />}
-              {f === 'notes' && <FileText size={14} />}
-              {f === 'canvas' && <Layout size={14} />}
-              {f === 'kanban' && <Kanban size={14} />}
-              {f === 'folders' && <Folder size={14} />}
-              <span>{f.charAt(0).toUpperCase() + f.slice(1)}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-      
-      {/* Content */}
-      <div className="home-content">
-        {/* Favorites Section */}
-        <HomeSection
-          title="Favorites"
-          icon={<Star size={18} fill="currentColor" />}
-          items={favoriteItems}
-          fileMetadata={fileMetadata}
-          favorites={favorites}
-          onOpenItem={handleOpenItem}
-          onIconChange={handleIconChange}
-          onContextMenu={(item, e) => showMenu(buildContextMenu(item), e)}
-          emptyMessage="Pin your favorite items for quick access"
-        />
-        
-        {/* Recent Section */}
-        <HomeSection
-          title="Recent"
-          icon={<Clock size={18} />}
-          items={recentItems}
-          fileMetadata={fileMetadata}
-          favorites={favorites}
-          onOpenItem={handleOpenItem}
-          onIconChange={handleIconChange}
-          onContextMenu={(item, e) => showMenu(buildContextMenu(item), e)}
-        />
-        
-        {/* All Content Section */}
-        <HomeSection
-          title={filter === 'all' ? 'All Content' : `${filter.charAt(0).toUpperCase() + filter.slice(1)}`}
-          icon={<Grid3X3 size={18} />}
-          items={filteredItems}
-          fileMetadata={fileMetadata}
-          favorites={favorites}
-          onOpenItem={handleOpenItem}
-          onIconChange={handleIconChange}
-          onContextMenu={(item, e) => showMenu(buildContextMenu(item), e)}
-          emptyMessage={searchQuery ? "No items match your search" : "No items to display"}
-        />
-      </div>
-      
-      {/* Context Menu */}
-      {menu && (
-        <ContextMenu
-          items={menu.items}
-          position={menu.position}
-          onClose={hideMenu}
-        />
-      )}
-
-      {/* Delete Confirmation Modal */}
-      {itemToDelete && (
-        <div className="modal-overlay" onClick={() => setItemToDelete(null)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">Delete Item</div>
-            <p style={{ color: 'var(--tx-2)', marginBottom: 20 }}>
-              Are you sure you want to delete <strong>"{itemToDelete.name}"</strong>?
-              <br />
-              <span style={{ fontSize: '0.875rem', color: 'var(--tx-3)' }}>
-                This action cannot be undone.
-              </span>
-            </p>
-            <div className="modal-actions">
-              <button className="btn secondary" onClick={() => setItemToDelete(null)}>
-                Cancel
-              </button>
-              <button 
-                className="btn danger" 
-                onClick={() => {
-                  deleteItem(itemToDelete.path);
-                  setItemToDelete(null);
-                }}
-                style={{ background: '#f87171', color: '#fff' }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
+
+const HomeCard: React.FC<{
+  item: HomeItem;
+  metadata?: FileMetadata;
+  selected: boolean;
+  onOpen: () => void;
+  onSelect: (e: React.MouseEvent) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+}> = ({ item, metadata, selected, onOpen, onSelect, onContextMenu, onDragStart, onDragOver, onDrop }) => {
+  const type = metadata?.itemType === 'canvas' ? 'Canvas' : metadata?.itemType === 'kanban' ? 'Kanban' : item.is_dir ? 'Folder' : 'Note';
+  return (
+    <div
+      className={`finder-card ${selected ? 'is-selected' : ''}`}
+      draggable
+      onClick={onSelect}
+      onDoubleClick={onOpen}
+      onContextMenu={onContextMenu}
+      onDragStart={onDragStart}
+      onDragOver={item.is_dir ? onDragOver : undefined}
+      onDrop={item.is_dir ? onDrop : undefined}
+      title={item.is_dir ? 'Double-click to open folder' : 'Double-click to open note'}
+    >
+      <div className="finder-card-art">
+        {item.is_dir ? <FolderArtwork metadata={metadata} /> :
+          metadata?.iconType === 'image' && metadata.icon ? <img className="finder-folder-art" src={metadata.icon} alt="" /> :
+          metadata?.icon ? <span className="finder-folder-emoji">{metadata.icon}</span> :
+          metadata?.itemType === 'canvas' ? <Layout size={50} /> :
+          metadata?.itemType === 'kanban' ? <Kanban size={50} /> : <FileText size={50} />}
+      </div>
+      <div className="finder-card-name">{item.name.replace(/\.md$/, '')}</div>
+      <div className="finder-card-type">{type}</div>
+      {metadata?.lastModified && <span className="finder-card-dot" />}
+    </div>
+  );
+};
+
+const HomeView: React.FC = () => {
+  const {
+    files, vaultPath, fileMetadata, favorites, openFile, createFile,
+    createFolder, createCanvasFile, createKanbanFile, toggleFavorite, deleteItem,
+    revealInFinder, copyToClipboard, duplicateFile, moveItem, setFileIcon, tagItems
+  } = useStore();
+  const { menu, showMenu, hideMenu } = useContextMenu();
+  const [currentFolder, setCurrentFolder] = useState(vaultPath ?? '');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+  const [view, setView] = useState<'icons' | 'list'>('icons');
+  const [grouping, setGrouping] = useState<Grouping>('none');
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [positions, setPositions] = useState<Record<string, string[]>>(() => {
+    try { return JSON.parse(localStorage.getItem(POSITIONS_KEY) ?? '{}'); } catch { return {}; }
+  });
+  const draggingPath = useRef<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [showMove, setShowMove] = useState(false);
+  const [showTag, setShowTag] = useState(false);
+  const [showArtwork, setShowArtwork] = useState<string | null>(null);
+  const [drawingFolder, setDrawingFolder] = useState<string | null>(null);
+  const [showDrawing, setShowDrawing] = useState(false);
+  const [namePrompt, setNamePrompt] = useState<'folder' | 'note' | null>(null);
+  const [nameValue, setNameValue] = useState('');
+  const [tagValue, setTagValue] = useState('');
+
+  useEffect(() => {
+    if (vaultPath && (!currentFolder || !currentFolder.startsWith(vaultPath))) setCurrentFolder(vaultPath);
+  }, [vaultPath, currentFolder]);
+
+  const allEntries = useMemo(() => flattenTree(files), [files]);
+  const items = useMemo(() => {
+    const direct = allEntries
+      .filter(item => isDirectChild(item.path, currentFolder))
+      .filter(item => item.is_dir || item.name.toLowerCase().endsWith('.md'))
+      .map(item => ({ path: item.path, name: item.name, is_dir: item.is_dir, modifiedAt: item.modifiedAt }));
+    const ordered = [...direct].sort((a, b) => {
+      const order = positions[currentFolder] ?? [];
+      const ai = order.indexOf(a.path), bi = order.indexOf(b.path);
+      if (ai !== -1 || bi !== -1) return (ai === -1 ? Number.MAX_SAFE_INTEGER : ai) - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
+      return a.name.localeCompare(b.name);
+    });
+    const now = Date.now();
+    const cutoff = dateFilter === 'today' ? new Date().setHours(0, 0, 0, 0)
+      : dateFilter === '7days' ? now - 7 * 86400000
+      : dateFilter === '30days' ? now - 30 * 86400000 : 0;
+    const filtered = ordered.filter(item => !cutoff || (item.modifiedAt ?? 0) >= cutoff);
+    if (!search.trim()) return filtered;
+    const query = search.toLowerCase();
+    return filtered.filter(item => item.name.toLowerCase().includes(query));
+  }, [allEntries, currentFolder, search, positions, dateFilter]);
+  const folders = useMemo(() => allEntries.filter(item => item.is_dir), [allEntries]);
+  const breadcrumbs = useMemo(() => {
+    if (!vaultPath || !currentFolder) return [];
+    const relative = currentFolder.slice(vaultPath.length).replace(/^[/\\]/, '');
+    const parts = relative ? relative.split(/[\\/]/) : [];
+    return parts.map((label, index) => {
+      const path = [vaultPath, ...parts.slice(0, index + 1)].join('/');
+      return { label, path };
+    });
+  }, [vaultPath, currentFolder]);
+
+  const selectItem = (item: HomeItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const additive = e.metaKey || e.ctrlKey;
+    setSelected(prev => {
+      const next = new Set(additive ? prev : []);
+      if (additive && prev.has(item.path)) next.delete(item.path);
+      else next.add(item.path);
+      return next;
+    });
+  };
+  const selectedPaths = [...selected];
+  const openItem = async (item: HomeItem) => {
+    if (item.is_dir) {
+      setCurrentFolder(item.path);
+      setSelected(new Set());
+    } else {
+      await openFile(item.path);
+    }
+  };
+  const moveSelected = async (target: string) => {
+    const paths = selectedPaths.filter(path => canMoveInto(path, target) && parentPath(path) !== target);
+    for (const path of paths) await moveItem(path, target);
+    setSelected(new Set());
+    setShowMove(false);
+  };
+  const createNamed = async () => {
+    const name = nameValue.trim();
+    if (!name || !namePrompt) return;
+    if (namePrompt === 'folder') await createFolder(name, currentFolder);
+    else await createFile(name, currentFolder);
+    setNamePrompt(null);
+    setNameValue('');
+    setShowNew(false);
+  };
+  const setArtworkFromImage = async (path: string) => {
+    try {
+      const bytes = await readFile(path);
+      setFileIcon(showArtwork!, bytesToDataUrl(bytes, pathName(path)), 'image');
+      setShowArtwork(null);
+    } catch (e) {
+      console.error('Folder artwork import failed:', e);
+      toast.error('Could not use that image');
+    }
+  };
+  const buildMenu = (item?: HomeItem): ContextMenuItem[] => {
+    const paths = item && !selected.has(item.path) ? [item.path] : selectedPaths;
+    const hasFolder = paths.some(path => allEntries.find(entry => entry.path === path)?.is_dir);
+    const first = item ?? items.find(i => selected.has(i.path));
+    if (!first) return [];
+    return [
+      { id: 'open', label: first.is_dir ? 'Open Folder' : 'Open', icon: first.is_dir ? <Folder size={16} /> : <FileText size={16} />, action: () => openItem(first) },
+      { id: 'move', label: `Move ${paths.length > 1 ? `${paths.length} Items` : 'to Folder'}…`, icon: <FolderPlus size={16} />, action: () => setShowMove(true) },
+      { id: 'tag', label: 'Add Tag…', icon: <Tag size={16} />, disabled: hasFolder, action: () => setShowTag(true) },
+      { id: 'divider-a', label: '', divider: true, action: () => {} },
+      ...(first.is_dir ? [{ id: 'art', label: 'Customize Folder Artwork…', icon: <Palette size={16} />, action: () => setShowArtwork(first.path) }] : []),
+      ...(first.is_dir ? [] : [{ id: 'favorite', label: paths.length > 1 ? 'Toggle Favorites' : favorites.includes(first.path) ? 'Remove from Favorites' : 'Add to Favorites', icon: <Heart size={16} />, action: () => paths.forEach(path => toggleFavorite(path)) }]),
+      { id: 'duplicate', label: 'Duplicate', icon: <Copy size={16} />, disabled: hasFolder, action: () => paths.forEach(path => duplicateFile(path)) },
+      { id: 'reveal', label: 'Reveal in Finder', icon: <ExternalLink size={16} />, action: () => revealInFinder(first.path) },
+      { id: 'copy', label: 'Copy Path', icon: <Copy size={16} />, action: () => copyToClipboard(first.path) },
+      { id: 'divider-b', label: '', divider: true, action: () => {} },
+      { id: 'delete', label: `Move to Trash${paths.length > 1 ? ` (${paths.length})` : ''}`, icon: <Trash2 size={16} />, action: async () => { for (const path of paths) await deleteItem(path); setSelected(new Set()); } }
+    ];
+  };
+  const onCardContext = (item: HomeItem, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!selected.has(item.path)) setSelected(new Set([item.path]));
+    showMenu(buildMenu(item), e);
+  };
+  const onDragStart = (item: HomeItem, e: React.DragEvent) => {
+    const paths = selected.has(item.path) ? selectedPaths : [item.path];
+    if (!selected.has(item.path)) setSelected(new Set(paths));
+    e.dataTransfer.setData('application/x-nopes-paths', JSON.stringify(paths));
+    e.dataTransfer.effectAllowed = 'move';
+    draggingPath.current = item.path;
+  };
+  const reorderItem = (target: HomeItem) => {
+    const source = draggingPath.current;
+    if (!source || source === target.path || parentPath(source) !== currentFolder) return;
+    const current = [...(positions[currentFolder] ?? items.map(item => item.path))].filter(path => items.some(item => item.path === path));
+    const from = current.indexOf(source), to = current.indexOf(target.path);
+    if (from < 0 || to < 0) return;
+    current.splice(from, 1);
+    current.splice(to, 0, source);
+    const next = { ...positions, [currentFolder]: current };
+    setPositions(next);
+    localStorage.setItem(POSITIONS_KEY, JSON.stringify(next));
+    draggingPath.current = null;
+  };
+  const onDropFolder = async (target: HomeItem, e: React.DragEvent) => {
+    if (!target.is_dir) return;
+    e.preventDefault();
+    const raw = e.dataTransfer.getData('application/x-nopes-paths');
+    const paths: string[] = raw ? JSON.parse(raw) : selectedPaths;
+    for (const path of paths) if (canMoveInto(path, target.path)) await moveItem(path, target.path);
+    setSelected(new Set());
+  };
+  const submitTag = async () => {
+    await tagItems(selectedPaths, tagValue);
+    setShowTag(false);
+    setTagValue('');
+  };
+
+  return (
+    <div className="home-view finder-home" onClick={() => { setSelected(new Set()); setShowNew(false); }}>
+      <div className="finder-toolbar" onClick={e => e.stopPropagation()}>
+        <div className="finder-toolbar-title"><h1>Home</h1><span>{items.length} items</span></div>
+        <div className="finder-toolbar-actions">
+          {selected.size > 0 && <span className="finder-selection-count">{selected.size} selected</span>}
+          <div className="home-search"><Search size={16} /><input placeholder="Search this folder" value={search} onChange={e => setSearch(e.target.value)} /></div>
+          <button className="finder-toolbar-button" onClick={() => setView(view === 'icons' ? 'list' : 'icons')} title="Change view">{view === 'icons' ? <List size={16} /> : <Grid3X3 size={16} />}</button>
+          <select className="finder-select" value={grouping} onChange={e => setGrouping(e.target.value as Grouping)} aria-label="Grouping">
+            <option value="none">Arrange: None</option><option value="date">Group by Date</option>
+          </select>
+          <select className="finder-select" value={dateFilter} onChange={e => setDateFilter(e.target.value as DateFilter)} aria-label="Date filter">
+            <option value="all">All dates</option><option value="today">Today</option><option value="7days">Last 7 days</option><option value="30days">Last 30 days</option>
+          </select>
+          <div className="home-new-wrapper">
+            <button className="home-new-btn" onClick={() => setShowNew(!showNew)}><Plus size={16} /> New</button>
+            {showNew && <div className="home-new-menu finder-new-menu">
+              <button onClick={() => { setNamePrompt('folder'); setShowNew(false); }}><FolderPlus size={16} /> New Folder</button>
+              <button onClick={() => { setNamePrompt('note'); setShowNew(false); }}><FileText size={16} /> New Note</button>
+              <button onClick={() => { createCanvasFile('Untitled Canvas', currentFolder); setShowNew(false); }}><Layout size={16} /> New Canvas</button>
+              <button onClick={() => { createKanbanFile('Untitled Kanban', currentFolder); setShowNew(false); }}><Kanban size={16} /> New Kanban</button>
+            </div>}
+          </div>
+        </div>
+      </div>
+      <div className="finder-breadcrumbs" onClick={e => e.stopPropagation()}>
+        <button className={currentFolder === vaultPath ? 'active' : ''} onClick={() => setCurrentFolder(vaultPath ?? '')}>Vault</button>
+        {breadcrumbs.map(crumb => <React.Fragment key={crumb.path}><ChevronRight size={14} /><button className={currentFolder === crumb.path ? 'active' : ''} onClick={() => setCurrentFolder(crumb.path)}>{crumb.label}</button></React.Fragment>)}
+      </div>
+      <div className="finder-content" onContextMenu={e => { e.preventDefault(); showMenu([{ id: 'new-folder', label: 'New Folder', icon: <FolderPlus size={16} />, action: () => setNamePrompt('folder') }], e); }}>
+        <div className={`finder-grid ${view === 'list' ? 'list-view' : ''}`}>
+          {(grouping === 'date' ? [...new Set(items.map(item => {
+            const date = item.modifiedAt ? new Date(item.modifiedAt) : new Date(0);
+            return date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+          }))] : [null]).map(group => {
+            const groupItems = group ? items.filter(item => {
+              const date = item.modifiedAt ? new Date(item.modifiedAt) : new Date(0);
+              return date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) === group;
+            }) : items;
+            return (
+              <React.Fragment key={group ?? 'all'}>
+                {group && <div className="finder-date-heading">{group}</div>}
+                {groupItems.map(item => (
+                  <HomeCard
+                    key={item.path}
+                    item={item}
+                    metadata={fileMetadata[item.path]}
+                    selected={selected.has(item.path)}
+                    onOpen={() => openItem(item)}
+                    onSelect={e => selectItem(item, e)}
+                    onContextMenu={e => onCardContext(item, e)}
+                    onDragStart={e => onDragStart(item, e)}
+                    onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add('is-drag-over'); }}
+                    onDrop={e => { e.currentTarget.classList.remove('is-drag-over'); if (item.is_dir) onDropFolder(item, e); else reorderItem(item); }}
+                  />
+                ))}
+              </React.Fragment>
+            );
+          })}
+        </div>
+        {items.length === 0 && <div className="finder-empty"><Folder size={42} /><strong>This folder is empty</strong><span>Create a note or folder to get started.</span></div>}
+      </div>
+
+      {menu && <ContextMenu items={menu.items} position={menu.position} onClose={hideMenu} />}
+      {namePrompt && <div className="finder-modal-overlay" onClick={() => setNamePrompt(null)}><form className="finder-small-modal" onSubmit={e => { e.preventDefault(); createNamed(); }} onClick={e => e.stopPropagation()}><h3>{namePrompt === 'folder' ? 'New Folder' : 'New Note'}</h3><input autoFocus value={nameValue} onChange={e => setNameValue(e.target.value)} placeholder={namePrompt === 'folder' ? 'Folder name' : 'Note name'} /><div className="finder-modal-actions"><button type="button" className="btn secondary" onClick={() => setNamePrompt(null)}>Cancel</button><button className="btn">Create</button></div></form></div>}
+      {showMove && <div className="finder-modal-overlay" onClick={() => setShowMove(false)}><div className="finder-small-modal" onClick={e => e.stopPropagation()}><h3>Move {selectedPaths.length} {selectedPaths.length === 1 ? 'item' : 'items'} to…</h3><div className="finder-folder-list">{folders.filter(folder => !selected.has(folder.path) && !selectedPaths.some(path => folder.path.startsWith(`${path}/`))).map(folder => <button key={folder.path} onClick={() => moveSelected(folder.path)}><Folder size={18} />{folder.path.replace(`${vaultPath}/`, '')}</button>)}</div><div className="finder-modal-actions"><button className="btn secondary" onClick={() => setShowMove(false)}>Cancel</button></div></div></div>}
+      {showTag && <div className="finder-modal-overlay" onClick={() => setShowTag(false)}><form className="finder-small-modal" onSubmit={e => { e.preventDefault(); submitTag(); }} onClick={e => e.stopPropagation()}><h3>Tag selected notes</h3><input autoFocus value={tagValue} onChange={e => setTagValue(e.target.value)} placeholder="e.g. project or #project" /><div className="finder-modal-actions"><button type="button" className="btn secondary" onClick={() => setShowTag(false)}>Cancel</button><button className="btn"><Tag size={15} /> Add tag</button></div></form></div>}
+      {showArtwork && <div className="finder-modal-overlay" onClick={() => setShowArtwork(null)}><div className="finder-art-modal" onClick={e => e.stopPropagation()}><div className="finder-modal-header"><strong>Customize folder artwork</strong><button onClick={() => setShowArtwork(null)}><X size={18} /></button></div><div className="finder-art-options"><button onClick={() => { setFileIcon(showArtwork, 'Folder', 'lucide'); setShowArtwork(null); }}><Folder size={32} fill="currentColor" strokeWidth={1.4} /> Default</button><button onClick={async () => { const chosen = await openDialog({ multiple: false, directory: false, filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] }); if (typeof chosen === 'string') await setArtworkFromImage(chosen); }}><Upload size={24} /> Picture</button><button onClick={() => { setDrawingFolder(showArtwork); setShowArtwork(null); setShowDrawing(true); }}><Palette size={24} /> Draw</button></div></div></div>}
+      {showDrawing && <DrawingModal onClose={() => { setShowDrawing(false); setDrawingFolder(null); }} onSave={data => { if (drawingFolder) setFileIcon(drawingFolder, data, 'image'); setShowDrawing(false); setDrawingFolder(null); }} />}
+    </div>
+  );
+};
+
+export { HomeView };

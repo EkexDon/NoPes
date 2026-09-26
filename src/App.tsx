@@ -79,7 +79,7 @@ type SettingsTab = 'general' | 'appearance' | 'security' | 'hotkeys';
 
 const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const {
-    vaultPath, theme, setTheme,
+    vaultPath, setVaultPath, theme, setTheme,
     isAutoSaveEnabled, setAutoSaveEnabled,
     isAiEnabled, setAiEnabled,
     isDigestEnabled, setDigestEnabled,
@@ -108,6 +108,15 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const iv = setInterval(fetch, 3000);
     return () => clearInterval(iv);
   }, []);
+
+  const handleChangeVault = useCallback(async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (selected) await setVaultPath(selected as string);
+    } catch (err) {
+      console.error('Failed to change vault location', err);
+    }
+  }, [setVaultPath]);
 
   return (
     <div className="settings-overlay" onClick={onClose}>
@@ -139,7 +148,14 @@ const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
                   <div className="setting-info-label">Vault Location</div>
                   <div className="setting-info-desc">Directory where your notes are stored.</div>
                 </div>
-                <code className="setting-value">{vaultPath ?? '—'}</code>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', maxWidth: '60%' }}>
+                  <code className="setting-value" style={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 }} title={vaultPath ?? ''}>
+                    {vaultPath ?? '—'}
+                  </code>
+                  <button className="welcome-open-btn" style={{ marginTop: 0, padding: '6px 14px', fontSize: '0.8rem', flexShrink: 0 }} onClick={handleChangeVault}>
+                    Change…
+                  </button>
+                </div>
               </div>
               <div className="setting-row">
                 <div>
